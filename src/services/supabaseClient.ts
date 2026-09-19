@@ -11,11 +11,11 @@ import { createClient } from '@supabase/supabase-js';
 // of hard-coding them.
 const SUPABASE_URL =
   (import.meta as any).env?.VITE_SUPABASE_URL ||
-  'https://hvqgxbxzzbyklzyerfpf.supabase.co';
+  'https://oafjuhjnnddgegjzvghw.supabase.co';
 
 const SUPABASE_ANON_KEY =
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
-  'sb_publishable_sVpJ8v787ta9EKZ4_fv6kA_vf18CS3l';
+  'sb_publishable_I8my-cbQctHNWVB42UrTMw_vOPhQPDt';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
