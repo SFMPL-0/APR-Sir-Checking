@@ -37,6 +37,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: Layers },
     { id: 'quick', label: 'Quick Calc', icon: Zap },
+    { id: 'bulk', label: 'Multi-Vehicle Entry', icon: Truck },
     { id: 'details', label: 'Detailed Breakdown', icon: Calculator },
     { id: 'scenarios', label: 'What-If Scenarios', icon: BarChart3 },
     { id: 'settings', label: 'Engine Settings', icon: Sliders },

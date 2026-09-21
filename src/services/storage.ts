@@ -14,15 +14,20 @@
  */
 
 import {
+  CalculationGroup,
   CalculationHistoryEntry,
   CalculationInput,
   CalculationResult,
+  DailyGroupSummary,
   ExpenseItem,
   GeneralSettings,
   InterestTranche,
+  MasterDataItem,
+  MasterDataKind,
   SavedCalculation,
   ScenarioDefinition,
   TdsRefundSettings,
+  VehicleLineItem,
 } from '../types';
 import {
   DEFAULT_EXPENSES,
@@ -31,6 +36,7 @@ import {
   DEFAULT_INTEREST_TRANCHES,
   DEFAULT_TDS_SETTINGS,
   calculateFreightProfit,
+  roundTo,
 } from './calculationEngine';
 import { APP_STATE_KEYS, supabase, TABLES } from './supabaseClient';
 
@@ -75,21 +81,27 @@ export interface AppState {
   generalSettings: GeneralSettings;
   scenarios: ScenarioDefinition[];
   savedCalculations: SavedCalculation[];
+  clients: MasterDataItem[];
+  truckTypes: MasterDataItem[];
+  locations: MasterDataItem[];
 }
 
 /**
- * Fetches every piece of app state in two round trips (one for the
- * key/value settings table, one for the saved-calculations list) and
+ * Fetches every piece of app state in a handful of parallel round trips
+ * (settings, saved calculations, and the three master-data lists) and
  * returns sane defaults for anything missing (e.g. first run against a
  * freshly created Supabase project).
  */
 export async function loadAllAppState(): Promise<AppState> {
-  const [stateResult, savedResult] = await Promise.all([
+  const [stateResult, savedResult, clients, truckTypes, locations] = await Promise.all([
     supabase.from(TABLES.APP_STATE).select('key, value'),
     supabase
       .from(TABLES.SAVED_CALCULATIONS)
       .select('*')
       .order('created_at', { ascending: false }),
+    loadMasterData('clients'),
+    loadMasterData('truck_types'),
+    loadMasterData('locations'),
   ]);
 
   if (stateResult.error) {
@@ -118,6 +130,9 @@ export async function loadAllAppState(): Promise<AppState> {
     generalSettings: kv.get(APP_STATE_KEYS.GENERAL) ?? DEFAULT_GENERAL_SETTINGS,
     scenarios: kv.get(APP_STATE_KEYS.SCENARIOS) ?? DEFAULT_SCENARIOS,
     savedCalculations,
+    clients,
+    truckTypes,
+    locations,
   };
 }
 
@@ -222,6 +237,10 @@ export async function saveNewCalculation(
     name: newRecord.name,
     trip_number: newRecord.tripNumber,
     notes: newRecord.notes,
+    client_name: input.clientName || null,
+    truck_type: input.truckType || null,
+    from_location: input.fromLocation || null,
+    to_location: input.toLocation || null,
     input: newRecord.input,
     expenses: newRecord.expenses,
     interest_tranches: newRecord.interestTranches,
@@ -374,6 +393,8 @@ export async function logCalculationHistory(
   const { error } = await supabase.from(TABLES.CALCULATION_HISTORY).insert({
     id,
     trip_number: input.tripNumber || null,
+    client_name: input.clientName || null,
+    truck_type: input.truckType || null,
     selling_price: result.sellingPrice,
     buying_price: result.buyingPrice,
     net_profit: result.tdsRefund.netProfitWithTdsSaving,
@@ -477,4 +498,289 @@ export async function clearCalculationHistory(): Promise<void> {
     console.error('Failed to clear calculation history', error);
     throw error;
   }
+}
+
+// ============================================================================
+// Multi-Vehicle Bulk Entry Groups
+//
+// For days with many vehicles/trips, the user adds them all at once as a
+// list of {vehicleNumber, sellingPrice, buyingPrice} rows. Their selling and
+// buying prices are summed, one calculation runs on the totals (same
+// expenses/interest/TDS/tax engine as everywhere else), and the whole batch
+// — vehicles + aggregated result — is saved as one "group" row so the user
+// can later see exactly how much business was done on any given day.
+// ============================================================================
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+}
+
+function rowToCalculationGroup(row: any): CalculationGroup {
+  return {
+    id: row.id,
+    groupName: row.group_name,
+    groupDate: row.group_date,
+    vehicles: row.vehicles,
+    totalSellingPrice: row.total_selling_price,
+    totalBuyingPrice: row.total_buying_price,
+    expenses: row.expenses,
+    interestTranches: row.interest_tranches,
+    tdsSettings: row.tds_settings,
+    generalSettings: row.general_settings,
+    result: row.result,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Sums a list of vehicle rows, runs the normal calculation engine once on
+ * the totals, and saves the whole batch (vehicles + aggregated result) to
+ * Supabase as one group.
+ */
+export async function saveCalculationGroup(
+  groupName: string,
+  vehicles: VehicleLineItem[],
+  expenses: ExpenseItem[],
+  interestTranches: InterestTranche[],
+  tdsSettings: TdsRefundSettings,
+  generalSettings: GeneralSettings,
+  groupDate?: string
+): Promise<CalculationGroup> {
+  const totalSellingPrice = roundTo(
+    vehicles.reduce((sum, v) => sum + (Number(v.sellingPrice) || 0), 0),
+    2
+  );
+  const totalBuyingPrice = roundTo(
+    vehicles.reduce((sum, v) => sum + (Number(v.buyingPrice) || 0), 0),
+    2
+  );
+
+  const input: CalculationInput = {
+    sellingPrice: totalSellingPrice,
+    buyingPrice: totalBuyingPrice,
+  };
+
+  const result = calculateFreightProfit(
+    input,
+    expenses,
+    interestTranches,
+    tdsSettings,
+    generalSettings
+  );
+
+  const nowIso = new Date().toISOString();
+  const id = 'grp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const resolvedGroupDate = groupDate || todayIsoDate();
+
+  const group: CalculationGroup = {
+    id,
+    groupName: groupName.trim() || `Batch ${resolvedGroupDate}`,
+    groupDate: resolvedGroupDate,
+    vehicles: JSON.parse(JSON.stringify(vehicles)),
+    totalSellingPrice,
+    totalBuyingPrice,
+    expenses: JSON.parse(JSON.stringify(expenses)),
+    interestTranches: JSON.parse(JSON.stringify(interestTranches)),
+    tdsSettings: JSON.parse(JSON.stringify(tdsSettings)),
+    generalSettings: JSON.parse(JSON.stringify(generalSettings)),
+    result,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  const { error } = await supabase.from(TABLES.CALCULATION_GROUPS).insert({
+    id: group.id,
+    group_name: group.groupName,
+    group_date: group.groupDate,
+    vehicle_count: group.vehicles.length,
+    total_selling_price: group.totalSellingPrice,
+    total_buying_price: group.totalBuyingPrice,
+    net_profit: group.result.tdsRefund.netProfitWithTdsSaving,
+    vehicles: group.vehicles,
+    expenses: group.expenses,
+    interest_tranches: group.interestTranches,
+    tds_settings: group.tdsSettings,
+    general_settings: group.generalSettings,
+    result: group.result,
+    created_at: group.createdAt,
+    updated_at: group.updatedAt,
+  });
+
+  if (error) {
+    console.error('Failed to save calculation group to Supabase', error);
+    throw error;
+  }
+
+  return group;
+}
+
+export interface CalculationGroupPage {
+  entries: CalculationGroup[];
+  hasMore: boolean;
+}
+
+export interface LoadCalculationGroupsOptions {
+  limit?: number;
+  /** Keyset cursor (see loadCalculationHistory) — pass the last entry's
+   *  createdAt to fetch the next page. */
+  before?: string;
+  /** Only groups whose groupDate falls in this inclusive range. Use the
+   *  same value for both to get a single day. */
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+export async function loadCalculationGroups(
+  options: LoadCalculationGroupsOptions = {}
+): Promise<CalculationGroupPage> {
+  const { limit = 30, before, dateFrom, dateTo } = options;
+
+  let query = supabase
+    .from(TABLES.CALCULATION_GROUPS)
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit + 1);
+
+  if (before) query = query.lt('created_at', before);
+  if (dateFrom) query = query.gte('group_date', dateFrom);
+  if (dateTo) query = query.lte('group_date', dateTo);
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('Failed to load calculation groups from Supabase', error);
+    return { entries: [], hasMore: false };
+  }
+
+  const rows = data || [];
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+
+  return { entries: page.map(rowToCalculationGroup), hasMore };
+}
+
+export async function deleteCalculationGroup(id: string): Promise<void> {
+  const { error } = await supabase
+    .from(TABLES.CALCULATION_GROUPS)
+    .delete()
+    .eq('id', id);
+  if (error) {
+    console.error('Failed to delete calculation group', error);
+    throw error;
+  }
+}
+
+/**
+ * Aggregates every group within [dateFrom, dateTo] into one row per day —
+ * "how much did I do today / this week / this month". Only the lightweight
+ * numeric columns are fetched (not the full vehicles/result JSONB), so this
+ * stays fast even after years of daily use.
+ */
+export async function loadDailyGroupSummary(
+  dateFrom: string,
+  dateTo: string
+): Promise<DailyGroupSummary[]> {
+  const { data, error } = await supabase
+    .from(TABLES.CALCULATION_GROUPS)
+    .select('group_date, vehicle_count, total_selling_price, total_buying_price, net_profit')
+    .gte('group_date', dateFrom)
+    .lte('group_date', dateTo);
+
+  if (error) {
+    console.error('Failed to load daily group summary from Supabase', error);
+    return [];
+  }
+
+  const byDate = new Map<string, DailyGroupSummary>();
+  for (const row of data || []) {
+    const existing = byDate.get(row.group_date) || {
+      groupDate: row.group_date,
+      groupCount: 0,
+      vehicleCount: 0,
+      totalSellingPrice: 0,
+      totalBuyingPrice: 0,
+      totalNetProfit: 0,
+    };
+    existing.groupCount += 1;
+    existing.vehicleCount += row.vehicle_count || 0;
+    existing.totalSellingPrice += Number(row.total_selling_price) || 0;
+    existing.totalBuyingPrice += Number(row.total_buying_price) || 0;
+    existing.totalNetProfit += Number(row.net_profit) || 0;
+    byDate.set(row.group_date, existing);
+  }
+
+  return Array.from(byDate.values()).sort((a, b) =>
+    b.groupDate.localeCompare(a.groupDate)
+  );
+}
+
+// ============================================================================
+// Master Data (Client Names, Truck Types, From/To Locations)
+//
+// Pure autocomplete suggestion lists — deliberately NOT foreign keys into
+// saved_calculations / calculation_groups / calculation_history. Those
+// tables keep their own copy of the name as plain text at the time it was
+// entered, so renaming or deleting a client/truck type here never breaks
+// (or silently rewrites) historical pricing records.
+// ============================================================================
+
+const MASTER_TABLE: Record<MasterDataKind, string> = {
+  clients: TABLES.CLIENTS,
+  truck_types: TABLES.TRUCK_TYPES,
+  locations: TABLES.LOCATIONS,
+};
+
+export async function loadMasterData(
+  kind: MasterDataKind
+): Promise<MasterDataItem[]> {
+  const { data, error } = await supabase
+    .from(MASTER_TABLE[kind])
+    .select('id, name')
+    .order('name', { ascending: true });
+
+  if (error) {
+    console.error(`Failed to load ${kind} from Supabase`, error);
+    return [];
+  }
+  return data || [];
+}
+
+/**
+ * Adds a new name to a master list, case-insensitively deduplicated (a
+ * unique index on lower(name) enforces this at the DB level too — see
+ * supabase-schema.sql). If the name already exists, returns the existing
+ * row instead of erroring, so "Add New" is always safe to click.
+ */
+export async function addMasterDataItem(
+  kind: MasterDataKind,
+  name: string
+): Promise<MasterDataItem | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+
+  const table = MASTER_TABLE[kind];
+  const id = kind + '_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+
+  const { data, error } = await supabase
+    .from(table)
+    .insert({ id, name: trimmed })
+    .select('id, name')
+    .single();
+
+  if (!error && data) return data;
+
+  // Likely a duplicate (unique index on lower(name)) — look up the existing
+  // row instead of failing the "Add New" action.
+  const { data: existing } = await supabase
+    .from(table)
+    .select('id, name')
+    .ilike('name', trimmed)
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) return existing;
+
+  console.error(`Failed to add "${trimmed}" to ${kind}`, error);
+  return null;
 }

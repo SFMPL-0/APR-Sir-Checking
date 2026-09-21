@@ -11,11 +11,11 @@ import { createClient } from '@supabase/supabase-js';
 // of hard-coding them.
 const SUPABASE_URL =
   (import.meta as any).env?.VITE_SUPABASE_URL ||
-  'https://oafjuhjnnddgegjzvghw.supabase.co';
+  'https://hvqgxbxzzbyklzyerfpf.supabase.co';
 
 const SUPABASE_ANON_KEY =
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
-  'sb_publishable_I8my-cbQctHNWVB42UrTMw_vOPhQPDt';
+  'sb_publishable_sVpJ8v787ta9EKZ4_fv6kA_vf18CS3l';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -24,6 +24,10 @@ export const TABLES = {
   APP_STATE: 'app_state',
   SAVED_CALCULATIONS: 'saved_calculations',
   CALCULATION_HISTORY: 'calculation_history',
+  CALCULATION_GROUPS: 'calculation_groups',
+  CLIENTS: 'clients',
+  TRUCK_TYPES: 'truck_types',
+  LOCATIONS: 'locations',
 } as const;
 
 // Keys used inside the app_state key/value table.

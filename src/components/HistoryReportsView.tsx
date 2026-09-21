@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Calendar,
+  CalendarDays,
   ChevronRight,
   Copy,
   Download,
@@ -13,11 +14,14 @@ import {
   Search,
   Share2,
   Trash2,
+  Truck,
 } from 'lucide-react';
 import {
+  CalculationGroup,
   CalculationHistoryEntry,
   CalculationInput,
   CalculationResult,
+  DailyGroupSummary,
   ExpenseItem,
   GeneralSettings,
   InterestTranche,
@@ -25,7 +29,9 @@ import {
   TdsRefundSettings,
 } from '../types';
 import {
+  CalculationGroupPage,
   CalculationHistoryPage,
+  LoadCalculationGroupsOptions,
   LoadCalculationHistoryOptions,
 } from '../services/storage';
 import {
@@ -54,6 +60,16 @@ interface HistoryReportsViewProps {
   onClearCalculationHistory: () => Promise<void>;
   onReopenHistoryEntry: (entry: CalculationHistoryEntry) => void;
   onSaveHistoryEntry: (entry: CalculationHistoryEntry, name: string) => Promise<void>;
+  onLoadCalculationGroups: (
+    options?: LoadCalculationGroupsOptions
+  ) => Promise<CalculationGroupPage>;
+  onLoadDailyGroupSummary: (
+    dateFrom: string,
+    dateTo: string
+  ) => Promise<DailyGroupSummary[]>;
+  onDeleteCalculationGroup: (id: string) => Promise<void>;
+  onReopenGroup: (group: CalculationGroup) => void;
+  onNavigateTab: (tab: string) => void;
 }
 
 export const HistoryReportsView: React.FC<HistoryReportsViewProps> = ({
@@ -72,9 +88,14 @@ export const HistoryReportsView: React.FC<HistoryReportsViewProps> = ({
   onClearCalculationHistory,
   onReopenHistoryEntry,
   onSaveHistoryEntry,
+  onLoadCalculationGroups,
+  onLoadDailyGroupSummary,
+  onDeleteCalculationGroup,
+  onReopenGroup,
+  onNavigateTab,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<
-    'history' | 'autolog' | 'reports'
+    'history' | 'autolog' | 'groups' | 'reports'
   >('history');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedReportType, setSelectedReportType] = useState<
@@ -148,6 +169,88 @@ export const HistoryReportsView: React.FC<HistoryReportsViewProps> = ({
     await onSaveHistoryEntry(entry, name.trim());
     alert(`Saved "${name.trim()}" to your archive.`);
   };
+
+  // Vehicle Groups (multi-vehicle bulk entry batches) state — paginated the
+  // same way as Auto Log, plus a Daily Summary computed server-side over a
+  // date range so "how much did I do today/this week/this month" is instant.
+  const [groups, setGroups] = useState<CalculationGroup[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupsHasMore, setGroupsHasMore] = useState(false);
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
+
+  const [dailySummary, setDailySummary] = useState<DailyGroupSummary[]>([]);
+  const [dailySummaryLoading, setDailySummaryLoading] = useState(false);
+  const [summaryRangeDays, setSummaryRangeDays] = useState(30);
+  const GROUP_PAGE_SIZE = 20;
+
+  function isoDaysAgo(days: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d.toISOString().slice(0, 10);
+  }
+  const todayIso = () => new Date().toISOString().slice(0, 10);
+
+  const refreshGroups = () => {
+    setGroupsLoading(true);
+    onLoadCalculationGroups({ limit: GROUP_PAGE_SIZE })
+      .then((page) => {
+        setGroups(page.entries);
+        setGroupsHasMore(page.hasMore);
+        setGroupsLoaded(true);
+      })
+      .finally(() => setGroupsLoading(false));
+  };
+
+  const loadMoreGroups = () => {
+    if (groups.length === 0) return;
+    const cursor = groups[groups.length - 1].createdAt;
+    setGroupsLoading(true);
+    onLoadCalculationGroups({ limit: GROUP_PAGE_SIZE, before: cursor })
+      .then((page) => {
+        setGroups((prev) => [...prev, ...page.entries]);
+        setGroupsHasMore(page.hasMore);
+      })
+      .finally(() => setGroupsLoading(false));
+  };
+
+  const refreshDailySummary = (rangeDays: number) => {
+    setDailySummaryLoading(true);
+    onLoadDailyGroupSummary(isoDaysAgo(rangeDays - 1), todayIso())
+      .then(setDailySummary)
+      .finally(() => setDailySummaryLoading(false));
+  };
+
+  useEffect(() => {
+    if (activeSubTab === 'groups' && !groupsLoaded) {
+      refreshGroups();
+      refreshDailySummary(summaryRangeDays);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSubTab]);
+
+  const handleChangeSummaryRange = (days: number) => {
+    setSummaryRangeDays(days);
+    refreshDailySummary(days);
+  };
+
+  const handleDeleteGroup = async (id: string) => {
+    if (!window.confirm('Delete this batch? This cannot be undone.')) return;
+    await onDeleteCalculationGroup(id);
+    setGroups((prev) => prev.filter((g) => g.id !== id));
+    refreshDailySummary(summaryRangeDays);
+  };
+
+  const grandTotalForRange = dailySummary.reduce(
+    (acc, d) => ({
+      groupCount: acc.groupCount + d.groupCount,
+      vehicleCount: acc.vehicleCount + d.vehicleCount,
+      totalSellingPrice: acc.totalSellingPrice + d.totalSellingPrice,
+      totalBuyingPrice: acc.totalBuyingPrice + d.totalBuyingPrice,
+      totalNetProfit: acc.totalNetProfit + d.totalNetProfit,
+    }),
+    { groupCount: 0, vehicleCount: 0, totalSellingPrice: 0, totalBuyingPrice: 0, totalNetProfit: 0 }
+  );
 
   // Filter calculations by query
   const filteredCalculations = savedCalculations.filter((calc) => {
@@ -254,6 +357,16 @@ export const HistoryReportsView: React.FC<HistoryReportsViewProps> = ({
             }`}
           >
             Auto Log{autoHistoryLoaded ? ` (${autoHistory.length})` : ''}
+          </button>
+          <button
+            onClick={() => setActiveSubTab('groups')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              activeSubTab === 'groups'
+                ? 'bg-amber-500 text-slate-900'
+                : 'bg-slate-700 text-slate-300'
+            }`}
+          >
+            Vehicle Groups{groupsLoaded ? ` (${groups.length})` : ''}
           </button>
           <button
             onClick={() => setActiveSubTab('reports')}
@@ -554,6 +667,277 @@ export const HistoryReportsView: React.FC<HistoryReportsViewProps> = ({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {/* SUB-TAB 1.75: MULTI-VEHICLE GROUPS + DAILY SUMMARY */}
+      {activeSubTab === 'groups' && (
+        <div className="space-y-4">
+          {/* Daily Summary */}
+          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <CalendarDays className="w-4 h-4 text-amber-400" />
+                Daily Totals — "How Much Did I Do?"
+              </h2>
+              <div className="flex items-center gap-1.5">
+                {[7, 30, 90].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => handleChangeSummaryRange(d)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                      summaryRangeDays === d
+                        ? 'bg-amber-500 text-slate-900'
+                        : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                    }`}
+                  >
+                    Last {d}d
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {dailySummaryLoading ? (
+              <div className="text-center py-8 text-slate-400 text-xs">
+                Loading daily totals…
+              </div>
+            ) : dailySummary.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 text-xs">
+                No vehicle batches saved in the last {summaryRangeDays} days yet.
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] bg-slate-950/60 border border-slate-800 rounded-xl p-3">
+                  <div>
+                    <div className="text-slate-500">Batches</div>
+                    <div className="text-white font-mono font-bold">{grandTotalForRange.groupCount}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Vehicles</div>
+                    <div className="text-white font-mono font-bold">{grandTotalForRange.vehicleCount}</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Total Selling</div>
+                    <div className="text-white font-mono font-bold">
+                      {formatCurrency(grandTotalForRange.totalSellingPrice, generalSettings.currencySymbol)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Total Buying</div>
+                    <div className="text-white font-mono font-bold">
+                      {formatCurrency(grandTotalForRange.totalBuyingPrice, generalSettings.currencySymbol)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-slate-500">Net Profit</div>
+                    <div
+                      className={`font-mono font-bold ${
+                        grandTotalForRange.totalNetProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {formatCurrency(grandTotalForRange.totalNetProfit, generalSettings.currencySymbol)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-slate-500 text-left border-b border-slate-700/80">
+                        <th className="py-2 font-semibold">Date</th>
+                        <th className="py-2 font-semibold">Batches</th>
+                        <th className="py-2 font-semibold">Vehicles</th>
+                        <th className="py-2 font-semibold">Selling</th>
+                        <th className="py-2 font-semibold">Buying</th>
+                        <th className="py-2 font-semibold">Net Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dailySummary.map((d) => (
+                        <tr key={d.groupDate} className="border-b border-slate-800/60">
+                          <td className="py-2 text-white font-mono">{d.groupDate}</td>
+                          <td className="py-2 text-slate-300">{d.groupCount}</td>
+                          <td className="py-2 text-slate-300">{d.vehicleCount}</td>
+                          <td className="py-2 text-white font-mono">
+                            {formatCurrency(d.totalSellingPrice, generalSettings.currencySymbol)}
+                          </td>
+                          <td className="py-2 text-white font-mono">
+                            {formatCurrency(d.totalBuyingPrice, generalSettings.currencySymbol)}
+                          </td>
+                          <td
+                            className={`py-2 font-mono font-bold ${
+                              d.totalNetProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                            }`}
+                          >
+                            {formatCurrency(d.totalNetProfit, generalSettings.currencySymbol)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Batch list */}
+          <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <Truck className="w-4 h-4 text-amber-400" />
+                All Batches
+              </h2>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onNavigateTab('bulk')}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition"
+                >
+                  + Add Vehicles
+                </button>
+                <button
+                  onClick={refreshGroups}
+                  disabled={groupsLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold transition disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${groupsLoading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            {groupsLoading && groups.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs">
+                Loading vehicle batches from Supabase…
+              </div>
+            ) : groups.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs">
+                No batches yet. Use "Multi-Vehicle Entry" to add several
+                vehicles at once instead of one-by-one.
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2.5">
+                  {groups.map((group) => (
+                    <div
+                      key={group.id}
+                      className="bg-slate-900/70 border border-slate-700/80 hover:border-slate-600 rounded-xl p-3.5 transition"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-white font-bold text-sm">{group.groupName}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 font-mono text-[10px] font-bold">
+                              {group.groupDate}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 text-[10px] font-bold">
+                              {group.vehicles.length} vehicles
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] mt-2">
+                            <div>
+                              <span className="text-slate-500">Selling: </span>
+                              <span className="text-white font-mono font-bold">
+                                {formatCurrency(group.totalSellingPrice, generalSettings.currencySymbol)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">Buying: </span>
+                              <span className="text-white font-mono font-bold">
+                                {formatCurrency(group.totalBuyingPrice, generalSettings.currencySymbol)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">Net Profit: </span>
+                              <span
+                                className={`font-mono font-bold ${
+                                  group.result.tdsRefund.netProfitWithTdsSaving >= 0
+                                    ? 'text-emerald-400'
+                                    : 'text-rose-400'
+                                }`}
+                              >
+                                {formatCurrency(group.result.tdsRefund.netProfitWithTdsSaving, generalSettings.currencySymbol)}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500">TDS Saving: </span>
+                              <span className="text-amber-400 font-mono font-bold">
+                                {formatCurrency(group.result.tdsRefund.netSavingInTds, generalSettings.currencySymbol)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() =>
+                              setExpandedGroupId(expandedGroupId === group.id ? null : group.id)
+                            }
+                            className="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold transition"
+                          >
+                            {expandedGroupId === group.id ? 'Hide Vehicles' : 'Show Vehicles'}
+                          </button>
+                          <button
+                            onClick={() => onReopenGroup(group)}
+                            className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition"
+                          >
+                            Open
+                          </button>
+                          <button
+                            onClick={() => handleDeleteGroup(group.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-800 transition"
+                            title="Delete batch"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {expandedGroupId === group.id && (
+                        <div className="mt-3 pt-3 border-t border-slate-700/80 overflow-x-auto">
+                          <table className="w-full text-[11px]">
+                            <thead>
+                              <tr className="text-slate-500 text-left">
+                                <th className="py-1 font-semibold">Vehicle / LR No.</th>
+                                <th className="py-1 font-semibold">Selling</th>
+                                <th className="py-1 font-semibold">Buying</th>
+                                <th className="py-1 font-semibold">Notes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {group.vehicles.map((v) => (
+                                <tr key={v.id} className="border-t border-slate-800/60">
+                                  <td className="py-1 text-white">{v.vehicleNumber || '—'}</td>
+                                  <td className="py-1 text-white font-mono">
+                                    {formatCurrency(v.sellingPrice, generalSettings.currencySymbol)}
+                                  </td>
+                                  <td className="py-1 text-white font-mono">
+                                    {formatCurrency(v.buyingPrice, generalSettings.currencySymbol)}
+                                  </td>
+                                  <td className="py-1 text-slate-400">{v.notes || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {groupsHasMore && (
+                  <div className="text-center pt-2">
+                    <button
+                      onClick={loadMoreGroups}
+                      disabled={groupsLoading}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold transition disabled:opacity-50"
+                    >
+                      {groupsLoading ? 'Loading…' : `Load Older Batches (${GROUP_PAGE_SIZE} more)`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 

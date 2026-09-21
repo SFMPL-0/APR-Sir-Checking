@@ -29,9 +29,12 @@ import {
   ExpenseItem,
   GeneralSettings,
   InterestTranche,
+  MasterDataItem,
+  MasterDataKind,
   TdsRefundSettings,
 } from '../types';
 import { formatCurrency, formatPercent } from '../services/calculationEngine';
+import { SearchableSelect } from './SearchableSelect';
 
 interface DashboardViewProps {
   input: CalculationInput;
@@ -44,8 +47,15 @@ interface DashboardViewProps {
   onNavigateTab: (tab: string) => void;
   onSaveCalculation: () => void;
   onExportExcel: () => void;
-  onPrintReport: () => void;
-  onExportPdf?: () => void;
+  onPrintReport: (showFormulas?: boolean) => void;
+  onExportPdf?: (showFormulas?: boolean) => void;
+  clients: MasterDataItem[];
+  truckTypes: MasterDataItem[];
+  locations: MasterDataItem[];
+  onAddMasterData: (
+    kind: MasterDataKind,
+    name: string
+  ) => Promise<MasterDataItem | null>;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -61,11 +71,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onExportExcel,
   onPrintReport,
   onExportPdf,
+  clients,
+  truckTypes,
+  locations,
+  onAddMasterData,
 }) => {
   const [quickDays, setQuickDays] = useState<number>(input.customDays ?? 20);
   const [quickRate, setQuickRate] = useState<number>(
     input.customInterestRate ?? 1.0
   );
+  // When off, printed/exported reports drop the "Formula / Basis" column
+  // and show only the final amounts — a clean statement for handing to a
+  // client without walking them through how the numbers were derived.
+  const [showFormulas, setShowFormulas] = useState(true);
 
   const handleSellingPriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = parseFloat(e.target.value) || 0;
@@ -109,14 +127,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span>Freight Profit Analysis • Financial Engine</span>
             </div>
             <h1 className="text-xl md:text-2xl font-bold text-white mt-1">
-              {input.title || 'Freight Profit & Tax Computation'}
+              {input.clientName ||
+                (input.fromLocation && input.toLocation
+                  ? `${input.fromLocation} → ${input.toLocation}`
+                  : input.title) ||
+                'Freight Profit & Tax Computation'}
             </h1>
             <p className="text-sm text-slate-400">
-              Trip Ref: <span className="text-slate-200 font-mono font-medium">{input.tripNumber || 'TR-001'}</span> • Currency: {generalSettings.currencyCode} ({generalSettings.currencySymbol})
+              Trip Ref: <span className="text-slate-200 font-mono font-medium">{input.tripNumber || 'TR-001'}</span>
+              {input.fromLocation && input.toLocation && (
+                <> • Route: <span className="text-slate-200 font-medium">{input.fromLocation} → {input.toLocation}</span></>
+              )}
+              {input.truckType && (
+                <> • Truck: <span className="text-slate-200 font-medium">{input.truckType}</span></>
+              )}
+              {' '}• Currency: {generalSettings.currencyCode} ({generalSettings.currencySymbol})
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-[11px] font-semibold cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showFormulas}
+                onChange={(e) => setShowFormulas(e.target.checked)}
+                className="accent-amber-500"
+              />
+              Show Formulas in Print/PDF
+            </label>
             <button
               id="btn-save-calc"
               onClick={onSaveCalculation}
@@ -127,7 +165,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
             <button
               id="btn-export-pdf"
-              onClick={onExportPdf || onPrintReport}
+              onClick={() => (onExportPdf || onPrintReport)(showFormulas)}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow-md transition active:scale-95"
               title="Export official PDF report to mobile storage"
             >
@@ -144,7 +182,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </button>
             <button
               id="btn-print-report"
-              onClick={onPrintReport}
+              onClick={() => onPrintReport(showFormulas)}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold shadow-md transition active:scale-95"
             >
               <Printer className="w-4 h-4" />
@@ -236,20 +274,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200"
                 />
               </div>
-              <div>
-                <label className="block text-[11px] text-slate-400 mb-1">
-                  Route / Note
-                </label>
-                <input
-                  type="text"
-                  value={input.title || ''}
-                  onChange={(e) =>
-                    setInput((p) => ({ ...p, title: e.target.value }))
-                  }
-                  placeholder="Mumbai to Delhi"
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200"
-                />
-              </div>
+              <SearchableSelect
+                label="Client Name"
+                value={input.clientName || ''}
+                onChange={(v) => setInput((p) => ({ ...p, clientName: v }))}
+                options={clients}
+                onAddNew={(name) => onAddMasterData('clients', name)}
+                placeholder="Search or add client…"
+              />
+              <SearchableSelect
+                label="From"
+                value={input.fromLocation || ''}
+                onChange={(v) => setInput((p) => ({ ...p, fromLocation: v }))}
+                options={locations}
+                onAddNew={(name) => onAddMasterData('locations', name)}
+                placeholder="Origin"
+              />
+              <SearchableSelect
+                label="To"
+                value={input.toLocation || ''}
+                onChange={(v) => setInput((p) => ({ ...p, toLocation: v }))}
+                options={locations}
+                onAddNew={(name) => onAddMasterData('locations', name)}
+                placeholder="Destination"
+              />
+              <SearchableSelect
+                label="Truck Type"
+                value={input.truckType || ''}
+                onChange={(v) => setInput((p) => ({ ...p, truckType: v }))}
+                options={truckTypes}
+                onAddNew={(name) => onAddMasterData('truck_types', name)}
+                placeholder="Search or add truck type…"
+              />
             </div>
           </div>
         </div>

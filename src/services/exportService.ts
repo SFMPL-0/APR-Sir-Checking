@@ -236,8 +236,38 @@ export async function exportCalculationToPdf(
   interestTranches: InterestTranche[],
   tdsSettings: TdsRefundSettings,
   generalSettings: GeneralSettings,
-  customFileName?: string
+  customFileName?: string,
+  showFormulas: boolean = true
 ): Promise<{ success: boolean; fileName: string; method: string }> {
+  // When formulas are hidden, drop the middle "Formula/Basis/Computation
+  // Rule" column entirely from a 3-column [label, formula, amount] table,
+  // rather than leaving an empty column behind, and widen the label column
+  // to fill the freed space.
+  const stripFormulaColumn = (
+    headRow: string[],
+    bodyRows: any[][]
+  ): { head: string[]; body: any[][]; columnStyles: any } => {
+    if (showFormulas) {
+      return {
+        head: headRow,
+        body: bodyRows,
+        columnStyles: {
+          0: { cellWidth: 80, fontStyle: 'bold' },
+          1: { cellWidth: 60 },
+          2: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
+        },
+      };
+    }
+    return {
+      head: [headRow[0], headRow[2]],
+      body: bodyRows.map((row) => [row[0], row[2]]),
+      columnStyles: {
+        0: { cellWidth: 120, fontStyle: 'bold' },
+        1: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
+      },
+    };
+  };
+
   const tripRef = (input.tripNumber || 'TR-001').trim();
   const safeTrip = tripRef.replace(/[^a-zA-Z0-9_-]/g, '_');
   const fileName = customFileName || `Freight_Report_${safeTrip}.pdf`;
@@ -333,17 +363,13 @@ export async function exportCalculationToPdf(
   curY += 25;
 
   // 3. Section 1: Revenue & Gross Margin Table
-  autoTable(doc, {
-    startY: curY,
-    margin: { left: margin, right: margin },
-    head: [
-      [
-        '1. REVENUE & GROSS PROFIT METRIC',
-        'COMPUTATION / BASIS',
-        `AMOUNT (${generalSettings.currencyCode})`,
-      ],
+  const section1 = stripFormulaColumn(
+    [
+      '1. REVENUE & GROSS PROFIT METRIC',
+      'COMPUTATION / BASIS',
+      `AMOUNT (${generalSettings.currencyCode})`,
     ],
-    body: [
+    [
       [
         'Selling Price (Customer Freight Revenue)',
         'Primary Billing Rate',
@@ -359,7 +385,14 @@ export async function exportCalculationToPdf(
         'Selling Price − Buying Price',
         `${formatCurrency(result.grossProfit, generalSettings.currencySymbol)} (${result.grossProfitMargin}%)`,
       ],
-    ],
+    ]
+  );
+
+  autoTable(doc, {
+    startY: curY,
+    margin: { left: margin, right: margin },
+    head: [section1.head],
+    body: section1.body,
     headStyles: {
       fillColor: [30, 41, 59],
       textColor: [255, 255, 255],
@@ -367,11 +400,7 @@ export async function exportCalculationToPdf(
       fontSize: 8.5,
     },
     bodyStyles: { fontSize: 8, textColor: [30, 41, 59] },
-    columnStyles: {
-      0: { cellWidth: 80, fontStyle: 'bold' },
-      1: { cellWidth: 60 },
-      2: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
-    },
+    columnStyles: section1.columnStyles,
     theme: 'striped',
   });
 
@@ -390,17 +419,20 @@ export async function exportCalculationToPdf(
     formatCurrency(result.totalInterest, generalSettings.currencySymbol),
   ]);
 
+  const section2 = stripFormulaColumn(
+    [
+      '2. INTEREST & FINANCING TRANCHES',
+      'FORMULA APPLIED',
+      `AMOUNT (${generalSettings.currencyCode})`,
+    ],
+    interestRows
+  );
+
   autoTable(doc, {
     startY: curY,
     margin: { left: margin, right: margin },
-    head: [
-      [
-        '2. INTEREST & FINANCING TRANCHES',
-        'FORMULA APPLIED',
-        `AMOUNT (${generalSettings.currencyCode})`,
-      ],
-    ],
-    body: interestRows,
+    head: [section2.head],
+    body: section2.body,
     headStyles: {
       fillColor: [30, 41, 59],
       textColor: [255, 255, 255],
@@ -408,11 +440,7 @@ export async function exportCalculationToPdf(
       fontSize: 8.5,
     },
     bodyStyles: { fontSize: 8, textColor: [30, 41, 59] },
-    columnStyles: {
-      0: { cellWidth: 80, fontStyle: 'bold' },
-      1: { cellWidth: 60 },
-      2: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
-    },
+    columnStyles: section2.columnStyles,
     theme: 'striped',
   });
 
@@ -438,17 +466,20 @@ export async function exportCalculationToPdf(
     formatCurrency(result.netTotalExpenses, generalSettings.currencySymbol),
   ]);
 
+  const section3 = stripFormulaColumn(
+    [
+      '3. OPERATING EXPENSES & NET OVERHEADS',
+      'EXPENSE RULE / BASIS',
+      `AMOUNT (${generalSettings.currencyCode})`,
+    ],
+    expenseRows
+  );
+
   autoTable(doc, {
     startY: curY,
     margin: { left: margin, right: margin },
-    head: [
-      [
-        '3. OPERATING EXPENSES & NET OVERHEADS',
-        'EXPENSE RULE / BASIS',
-        `AMOUNT (${generalSettings.currencyCode})`,
-      ],
-    ],
-    body: expenseRows,
+    head: [section3.head],
+    body: section3.body,
     headStyles: {
       fillColor: [30, 41, 59],
       textColor: [255, 255, 255],
@@ -456,11 +487,7 @@ export async function exportCalculationToPdf(
       fontSize: 8.5,
     },
     bodyStyles: { fontSize: 8, textColor: [30, 41, 59] },
-    columnStyles: {
-      0: { cellWidth: 80, fontStyle: 'bold' },
-      1: { cellWidth: 60 },
-      2: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
-    },
+    columnStyles: section3.columnStyles,
     theme: 'striped',
   });
 
@@ -507,17 +534,20 @@ export async function exportCalculationToPdf(
     ],
   ];
 
+  const section4 = stripFormulaColumn(
+    [
+      '4. TDS CLAIM & REFUND ECONOMICS',
+      'STATUTORY COMPUTATION RULE',
+      `AMOUNT (${generalSettings.currencyCode})`,
+    ],
+    tdsRows
+  );
+
   autoTable(doc, {
     startY: curY,
     margin: { left: margin, right: margin },
-    head: [
-      [
-        '4. TDS CLAIM & REFUND ECONOMICS',
-        'STATUTORY COMPUTATION RULE',
-        `AMOUNT (${generalSettings.currencyCode})`,
-      ],
-    ],
-    body: tdsRows,
+    head: [section4.head],
+    body: section4.body,
     headStyles: {
       fillColor: [30, 41, 59],
       textColor: [255, 255, 255],
@@ -525,11 +555,7 @@ export async function exportCalculationToPdf(
       fontSize: 8.5,
     },
     bodyStyles: { fontSize: 8, textColor: [30, 41, 59] },
-    columnStyles: {
-      0: { cellWidth: 80, fontStyle: 'bold' },
-      1: { cellWidth: 60 },
-      2: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
-    },
+    columnStyles: section4.columnStyles,
     theme: 'striped',
   });
 
@@ -542,17 +568,13 @@ export async function exportCalculationToPdf(
   }
 
   // 7. Section 5: Profitability & Tax Computation Table
-  autoTable(doc, {
-    startY: curY,
-    margin: { left: margin, right: margin },
-    head: [
-      [
-        '5. NET PROFITABILITY & CORPORATE TAX',
-        'FORMULA / METRIC',
-        `VALUE (${generalSettings.currencyCode})`,
-      ],
+  const section5 = stripFormulaColumn(
+    [
+      '5. NET PROFITABILITY & CORPORATE TAX',
+      'FORMULA / METRIC',
+      `VALUE (${generalSettings.currencyCode})`,
     ],
-    body: [
+    [
       [
         'Net Profit Before Tax (NPBT)',
         'Gross Profit − Net Total Expenses',
@@ -573,7 +595,14 @@ export async function exportCalculationToPdf(
         'PAT ÷ Selling Price × 100',
         `${result.percentageOfSale}%`,
       ],
-    ],
+    ]
+  );
+
+  autoTable(doc, {
+    startY: curY,
+    margin: { left: margin, right: margin },
+    head: [section5.head],
+    body: section5.body,
     headStyles: {
       fillColor: [30, 41, 59],
       textColor: [255, 255, 255],
@@ -581,11 +610,7 @@ export async function exportCalculationToPdf(
       fontSize: 8.5,
     },
     bodyStyles: { fontSize: 8.5, textColor: [30, 41, 59] },
-    columnStyles: {
-      0: { cellWidth: 80, fontStyle: 'bold' },
-      1: { cellWidth: 60 },
-      2: { cellWidth: 'auto', halign: 'right', fontStyle: 'bold' },
-    },
+    columnStyles: section5.columnStyles,
     theme: 'striped',
   });
 
@@ -644,7 +669,8 @@ export function printCalculationReport(
   expenses: ExpenseItem[],
   interestTranches: InterestTranche[],
   tdsSettings: TdsRefundSettings,
-  generalSettings: GeneralSettings
+  generalSettings: GeneralSettings,
+  showFormulas: boolean = true
 ): void {
   const isMobile = /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent);
   if (isMobile) {
@@ -656,7 +682,9 @@ export function printCalculationReport(
       expenses,
       interestTranches,
       tdsSettings,
-      generalSettings
+      generalSettings,
+      undefined,
+      showFormulas
     );
     return;
   }
@@ -670,10 +698,20 @@ export function printCalculationReport(
       expenses,
       interestTranches,
       tdsSettings,
-      generalSettings
+      generalSettings,
+      undefined,
+      showFormulas
     );
     return;
   }
+
+  // When formulas are hidden, the "Formula / Basis" / "Computation Rule"
+  // column is dropped entirely (not just blanked) so the printed report
+  // reads as a clean amount-only statement rather than leaving an empty
+  // column behind.
+  const formulaHeaderCell = showFormulas ? '<th>Formula / Basis</th>' : '';
+  const computationHeaderCell = showFormulas ? '<th>Computation Rule</th>' : '';
+  const formulaCell = (formula: string) => (showFormulas ? `<td>${formula}</td>` : '');
 
   const html = `
 <!DOCTYPE html>
@@ -728,21 +766,21 @@ export function printCalculationReport(
 
   <h2>2. Interest & Operating Expenses</h2>
   <table>
-    <tr><th>Description / Allocation</th><th>Formula / Basis</th><th class="text-right">Amount (${generalSettings.currencyCode})</th></tr>
+    <tr><th>Description / Allocation</th>${formulaHeaderCell}<th class="text-right">Amount (${generalSettings.currencyCode})</th></tr>
     ${result.interestDetails
       .map(
         (i) =>
-          `<tr><td>${i.name} (${i.allocationPercent}%)</td><td>${i.formulaString}</td><td class="text-right">${formatCurrency(i.amount, generalSettings.currencySymbol)}</td></tr>`
+          `<tr><td>${i.name} (${i.allocationPercent}%)</td>${formulaCell(i.formulaString)}<td class="text-right">${formatCurrency(i.amount, generalSettings.currencySymbol)}</td></tr>`
       )
       .join('')}
     ${result.expenseDetails
       .filter((e) => e.enabled)
       .map(
         (e) =>
-          `<tr><td>${e.name}</td><td>${e.formulaString}</td><td class="text-right">${formatCurrency(e.amount, generalSettings.currencySymbol)}</td></tr>`
+          `<tr><td>${e.name}</td>${formulaCell(e.formulaString)}<td class="text-right">${formatCurrency(e.amount, generalSettings.currencySymbol)}</td></tr>`
       )
       .join('')}
-    <tr class="highlight"><td><strong>Net Total Expenses</strong></td><td>Total Interest + Operating Expenses</td><td class="text-right">${formatCurrency(result.netTotalExpenses, generalSettings.currencySymbol)}</td></tr>
+    <tr class="highlight"><td><strong>Net Total Expenses</strong></td>${formulaCell('Total Interest + Operating Expenses')}<td class="text-right">${formatCurrency(result.netTotalExpenses, generalSettings.currencySymbol)}</td></tr>
   </table>
 
   <h2>3. Profitability & Tax Computation</h2>
@@ -756,13 +794,13 @@ export function printCalculationReport(
 
   <h2>4. TDS Claim / Refund Analysis</h2>
   <table>
-    <tr><th>Line Item</th><th>Computation Rule</th><th class="text-right">Amount (${generalSettings.currencyCode})</th></tr>
-    <tr><td>Nominal TDS Deducted</td><td>2% on Selling Price</td><td class="text-right">${formatCurrency(result.tdsRefund.nominalTdsAmount, generalSettings.currencySymbol)}</td></tr>
-    <tr><td>Less: Carrying Cost to get refund</td><td>${result.tdsRefund.carryingCostFormula}</td><td class="text-right">-${formatCurrency(result.tdsRefund.carryingCostAmount, generalSettings.currencySymbol)}</td></tr>
-    <tr><td>Add: Interest paid by IT Dept</td><td>${result.tdsRefund.itInterestFormula}</td><td class="text-right">+${formatCurrency(result.tdsRefund.itInterestAmount, generalSettings.currencySymbol)}</td></tr>
-    <tr><td>Less: Actual Income Tax Liabilities</td><td>${result.tdsRefund.actualTaxFormula}</td><td class="text-right">-${formatCurrency(result.tdsRefund.actualTaxLiabilities, generalSettings.currencySymbol)}</td></tr>
-    <tr class="highlight"><td>Net Saving in TDS</td><td>TDS − Carrying Cost + IT Int − Tax</td><td class="text-right">${formatCurrency(result.tdsRefund.netSavingInTds, generalSettings.currencySymbol)}</td></tr>
-    <tr class="highlight"><td>Net Effective Profit with TDS Saving</td><td>PAT + Net Saving in TDS</td><td class="text-right">${formatCurrency(result.tdsRefund.netEffectiveProfitWithTds, generalSettings.currencySymbol)} (${result.tdsRefund.percentageOfProfitAfterTdsSaving}%)</td></tr>
+    <tr><th>Line Item</th>${computationHeaderCell}<th class="text-right">Amount (${generalSettings.currencyCode})</th></tr>
+    <tr><td>Nominal TDS Deducted</td>${formulaCell('2% on Selling Price')}<td class="text-right">${formatCurrency(result.tdsRefund.nominalTdsAmount, generalSettings.currencySymbol)}</td></tr>
+    <tr><td>Less: Carrying Cost to get refund</td>${formulaCell(result.tdsRefund.carryingCostFormula)}<td class="text-right">-${formatCurrency(result.tdsRefund.carryingCostAmount, generalSettings.currencySymbol)}</td></tr>
+    <tr><td>Add: Interest paid by IT Dept</td>${formulaCell(result.tdsRefund.itInterestFormula)}<td class="text-right">+${formatCurrency(result.tdsRefund.itInterestAmount, generalSettings.currencySymbol)}</td></tr>
+    <tr><td>Less: Actual Income Tax Liabilities</td>${formulaCell(result.tdsRefund.actualTaxFormula)}<td class="text-right">-${formatCurrency(result.tdsRefund.actualTaxLiabilities, generalSettings.currencySymbol)}</td></tr>
+    <tr class="highlight"><td>Net Saving in TDS</td>${formulaCell('TDS − Carrying Cost + IT Int − Tax')}<td class="text-right">${formatCurrency(result.tdsRefund.netSavingInTds, generalSettings.currencySymbol)}</td></tr>
+    <tr class="highlight"><td>Net Effective Profit with TDS Saving</td>${formulaCell('PAT + Net Saving in TDS')}<td class="text-right">${formatCurrency(result.tdsRefund.netEffectiveProfitWithTds, generalSettings.currencySymbol)} (${result.tdsRefund.percentageOfProfitAfterTdsSaving}%)</td></tr>
   </table>
 
   <div style="margin-top: 40px; display: flex; justify-content: space-between; font-size: 10pt;">

@@ -64,6 +64,11 @@ export interface CalculationInput {
   notes?: string;
   customDays?: number;
   customInterestRate?: number;
+  // Core Trip Pricing — searchable master-data fields (see MasterDataTable)
+  clientName?: string;
+  fromLocation?: string;
+  toLocation?: string;
+  truckType?: string;
 }
 
 export interface InterestCalculationDetail {
@@ -180,4 +185,59 @@ export interface ScenarioDefinition {
   interestRate: number;
   incomeTaxRate?: number;
   notes?: string;
+}
+
+// One vehicle/trip's raw selling & buying price inside a multi-vehicle
+// bulk-entry batch (see CalculationGroup below).
+export interface VehicleLineItem {
+  id: string;
+  vehicleNumber: string; // truck no. / LR no. / any label the user wants
+  sellingPrice: number;
+  buyingPrice: number;
+  notes?: string;
+}
+
+// A single day's (or session's) batch of multiple vehicles entered together.
+// Their selling/buying prices are summed into one totalSellingPrice /
+// totalBuyingPrice, and the rest of the calculation (expenses, interest,
+// TDS, tax) runs once on those totals — exactly like a normal calculation,
+// just fed an aggregated input instead of one vehicle's numbers.
+export interface CalculationGroup {
+  id: string;
+  groupName: string;
+  groupDate: string; // 'YYYY-MM-DD', used to group/report "how much per day"
+  vehicles: VehicleLineItem[];
+  totalSellingPrice: number;
+  totalBuyingPrice: number;
+  expenses: ExpenseItem[];
+  interestTranches: InterestTranche[];
+  tdsSettings: TdsRefundSettings;
+  generalSettings: GeneralSettings;
+  result: CalculationResult;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Aggregated totals for one calendar day, across every group logged that
+// day — this is what answers "how much did I do today".
+export interface DailyGroupSummary {
+  groupDate: string;
+  groupCount: number;
+  vehicleCount: number;
+  totalSellingPrice: number;
+  totalBuyingPrice: number;
+  totalNetProfit: number;
+}
+
+// Simple master-data name lists (Client Name, Truck Type, From/To locations)
+// used to power the searchable "type to filter, or add new" dropdowns in
+// Core Trip Pricing. Deliberately just an id + name — these exist purely to
+// power autocomplete suggestions, not as foreign keys into historical
+// records (so renaming/removing one never touches past calculations, which
+// keep their own copy of the name as text).
+export type MasterDataKind = 'clients' | 'truck_types' | 'locations';
+
+export interface MasterDataItem {
+  id: string;
+  name: string;
 }

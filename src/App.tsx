@@ -11,9 +11,12 @@ import {
   ExpenseItem,
   GeneralSettings,
   InterestTranche,
+  MasterDataItem,
+  MasterDataKind,
   SavedCalculation,
   ScenarioDefinition,
   TdsRefundSettings,
+  VehicleLineItem,
 } from './types';
 import {
   calculateFreightProfit,
@@ -26,11 +29,16 @@ import {
 import {
   clearCalculationHistory,
   DEFAULT_SCENARIOS,
+  addMasterDataItem,
+  deleteCalculationGroup,
   deleteSavedCalculation,
   duplicateSavedCalculation,
   loadAllAppState,
   loadCalculationHistory,
+  loadCalculationGroups,
+  loadDailyGroupSummary,
   logCalculationHistory,
+  saveCalculationGroup,
   saveCurrentExpenses,
   saveCurrentGeneralSettings,
   saveCurrentInput,
@@ -48,9 +56,11 @@ import {
 import { Navbar } from './components/Navbar';
 import { DashboardView } from './components/DashboardView';
 import { QuickCalcView } from './components/QuickCalcView';
+import { BulkEntryView } from './components/BulkEntryView';
 import { CalculationDetailsView } from './components/CalculationDetailsView';
 import { ScenarioView } from './components/ScenarioView';
 import { SettingsView } from './components/SettingsView';
+import { SettingsPasswordGate } from './components/SettingsPasswordGate';
 import { HistoryReportsView } from './components/HistoryReportsView';
 
 export default function App() {
@@ -87,6 +97,19 @@ export default function App() {
     SavedCalculation[]
   >([]);
 
+  // Core Trip Pricing master data (Client Name / Truck Type / From-To
+  // Location suggestion lists) — pure autocomplete lists, not foreign keys.
+  const [clients, setClients] = useState<MasterDataItem[]>([]);
+  const [truckTypes, setTruckTypes] = useState<MasterDataItem[]>([]);
+  const [locations, setLocations] = useState<MasterDataItem[]>([]);
+
+  // Engine Settings is password-protected — re-locks whenever you navigate
+  // away, so it must be unlocked again each time you open it.
+  const [settingsUnlocked, setSettingsUnlocked] = useState(false);
+  useEffect(() => {
+    if (activeTab !== 'settings') setSettingsUnlocked(false);
+  }, [activeTab]);
+
   // One-time fetch of everything from Supabase on app start.
   useEffect(() => {
     let cancelled = false;
@@ -100,6 +123,9 @@ export default function App() {
         setGeneralSettings(state.generalSettings);
         setScenarios(state.scenarios);
         setSavedCalculations(state.savedCalculations);
+        setClients(state.clients);
+        setTruckTypes(state.truckTypes);
+        setLocations(state.locations);
       })
       .catch((err) => {
         console.error('Failed to load app state from Supabase', err);
@@ -152,16 +178,27 @@ export default function App() {
   }, [input, expenses, interestTranches, tdsSettings, generalSettings]);
 
   // Automatic Calculation History Log
-  // Every calculation is logged to Supabase in the background — separate
-  // from the explicit "Save Current Trip" flow — so old data is always
-  // retrievable later even if the user never clicked Save. Debounced so it
-  // only writes once the numbers have settled (2.5s of no further edits),
-  // and skipped entirely for an empty/default calculation or a duplicate of
-  // the last logged snapshot.
+  //
+  // Earlier this logged a snapshot on every settled edit (2.5s debounce),
+  // which meant every keystroke-adjacent tweak — including just adjusting
+  // Engine Settings — created a new row. At real-world volume that grows
+  // calculation_history unboundedly with mostly-redundant rows.
+  //
+  // Instead, this now logs only at a meaningful checkpoint: when you
+  // navigate away from the calculator (Dashboard/Quick Calc) after entering
+  // a real trip (selling & buying price both set), and only if it differs
+  // from the last thing logged this session. That's roughly one row per
+  // trip actually worked on, not one row per keystroke.
   const lastLoggedSignatureRef = useRef<string | null>(null);
+  const prevActiveTabRef = useRef(activeTab);
   useEffect(() => {
-    if (!isLoaded) return;
-    if (!input.sellingPrice && !input.buyingPrice) return; // nothing meaningful yet
+    const leavingCalculator =
+      prevActiveTabRef.current !== activeTab &&
+      (prevActiveTabRef.current === 'dashboard' || prevActiveTabRef.current === 'quick');
+    prevActiveTabRef.current = activeTab;
+
+    if (!isLoaded || !leavingCalculator) return;
+    if (!input.sellingPrice || !input.buyingPrice) return; // not a real trip yet
 
     const signature = JSON.stringify({
       input,
@@ -170,29 +207,24 @@ export default function App() {
       tdsSettings,
       generalSettings,
     });
-
     if (signature === lastLoggedSignatureRef.current) return;
 
-    const timer = setTimeout(() => {
-      logCalculationHistory(
-        input,
-        expenses,
-        interestTranches,
-        tdsSettings,
-        generalSettings,
-        result
-      )
-        .then(() => {
-          lastLoggedSignatureRef.current = signature;
-        })
-        .catch((err) =>
-          console.error('Failed to auto-log calculation to Supabase', err)
-        );
-    }, 2500);
-
-    return () => clearTimeout(timer);
+    logCalculationHistory(
+      input,
+      expenses,
+      interestTranches,
+      tdsSettings,
+      generalSettings,
+      result
+    )
+      .then(() => {
+        lastLoggedSignatureRef.current = signature;
+      })
+      .catch((err) =>
+        console.error('Failed to auto-log calculation to Supabase', err)
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, expenses, interestTranches, tdsSettings, generalSettings, isLoaded]);
+  }, [activeTab]);
 
   // Save Modal State
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -289,6 +321,68 @@ export default function App() {
     setSavedCalculations(updated);
   };
 
+  // Multi-Vehicle Bulk Entry: sums the vehicle rows' selling/buying prices,
+  // runs the normal calculation engine once on the totals, and saves the
+  // whole batch to Supabase as one group.
+  const handleSaveGroup = async (
+    groupName: string,
+    vehicles: VehicleLineItem[],
+    groupDate: string
+  ) => {
+    return saveCalculationGroup(
+      groupName,
+      vehicles,
+      expenses,
+      interestTranches,
+      tdsSettings,
+      generalSettings,
+      groupDate
+    );
+  };
+
+  // Reopen a saved vehicle-group's aggregated totals into the live
+  // calculator (e.g. to review/print/export the full breakdown for that day).
+  const handleReopenGroup = (group: {
+    totalSellingPrice: number;
+    totalBuyingPrice: number;
+    groupName: string;
+    expenses: ExpenseItem[];
+    interestTranches: InterestTranche[];
+    tdsSettings: TdsRefundSettings;
+    generalSettings: GeneralSettings;
+  }) => {
+    setInput({
+      sellingPrice: group.totalSellingPrice,
+      buyingPrice: group.totalBuyingPrice,
+      title: group.groupName,
+    });
+    setExpenses(group.expenses);
+    setInterestTranches(group.interestTranches);
+    setTdsSettings(group.tdsSettings);
+    setGeneralSettings(group.generalSettings);
+    setActiveTab('dashboard');
+  };
+
+  const handleDeleteGroup = async (id: string) => {
+    await deleteCalculationGroup(id);
+  };
+
+  // Core Trip Pricing: add a new Client/Truck Type/Location suggestion,
+  // then make it immediately available in the dropdown.
+  const handleAddMasterData = async (
+    kind: MasterDataKind,
+    name: string
+  ): Promise<MasterDataItem | null> => {
+    const created = await addMasterDataItem(kind, name);
+    if (!created) return null;
+    const setter =
+      kind === 'clients' ? setClients : kind === 'truck_types' ? setTruckTypes : setLocations;
+    setter((prev) =>
+      prev.some((p) => p.id === created.id) ? prev : [...prev, created].sort((a, b) => a.name.localeCompare(b.name))
+    );
+    return created;
+  };
+
   const handleApplyScenario = (sc: ScenarioDefinition) => {
     setInput((prev) => ({
       ...prev,
@@ -318,25 +412,28 @@ export default function App() {
     );
   };
 
-  const handlePrint = () => {
+  const handlePrint = (showFormulas: boolean = true) => {
     printCalculationReport(
       input,
       result,
       expenses,
       interestTranches,
       tdsSettings,
-      generalSettings
+      generalSettings,
+      showFormulas
     );
   };
 
-  const handleExportPdf = async () => {
+  const handleExportPdf = async (showFormulas: boolean = true) => {
     await exportCalculationToPdf(
       input,
       result,
       expenses,
       interestTranches,
       tdsSettings,
-      generalSettings
+      generalSettings,
+      undefined,
+      showFormulas
     );
   };
 
@@ -390,6 +487,10 @@ export default function App() {
             onExportExcel={handleExportExcel}
             onPrintReport={handlePrint}
             onExportPdf={handleExportPdf}
+            clients={clients}
+            truckTypes={truckTypes}
+            locations={locations}
+            onAddMasterData={handleAddMasterData}
           />
         )}
 
@@ -399,6 +500,17 @@ export default function App() {
             setInput={setInput}
             result={result}
             generalSettings={generalSettings}
+            onNavigateTab={setActiveTab}
+          />
+        )}
+
+        {activeTab === 'bulk' && (
+          <BulkEntryView
+            expenses={expenses}
+            interestTranches={interestTranches}
+            tdsSettings={tdsSettings}
+            generalSettings={generalSettings}
+            onSaveGroup={handleSaveGroup}
             onNavigateTab={setActiveTab}
           />
         )}
@@ -428,17 +540,21 @@ export default function App() {
         )}
 
         {activeTab === 'settings' && (
-          <SettingsView
-            expenses={expenses}
-            setExpenses={setExpenses}
-            interestTranches={interestTranches}
-            setInterestTranches={setInterestTranches}
-            tdsSettings={tdsSettings}
-            setTdsSettings={setTdsSettings}
-            generalSettings={generalSettings}
-            setGeneralSettings={setGeneralSettings}
-            initialSection={settingsSection}
-          />
+          settingsUnlocked ? (
+            <SettingsView
+              expenses={expenses}
+              setExpenses={setExpenses}
+              interestTranches={interestTranches}
+              setInterestTranches={setInterestTranches}
+              tdsSettings={tdsSettings}
+              setTdsSettings={setTdsSettings}
+              generalSettings={generalSettings}
+              setGeneralSettings={setGeneralSettings}
+              initialSection={settingsSection}
+            />
+          ) : (
+            <SettingsPasswordGate onUnlock={() => setSettingsUnlocked(true)} />
+          )
         )}
 
         {activeTab === 'history' && (
@@ -458,6 +574,11 @@ export default function App() {
             onClearCalculationHistory={clearCalculationHistory}
             onReopenHistoryEntry={handleReopenHistoryEntry}
             onSaveHistoryEntry={handleSaveHistoryEntry}
+            onLoadCalculationGroups={loadCalculationGroups}
+            onLoadDailyGroupSummary={loadDailyGroupSummary}
+            onDeleteCalculationGroup={handleDeleteGroup}
+            onReopenGroup={handleReopenGroup}
+            onNavigateTab={setActiveTab}
           />
         )}
       </main>
