@@ -150,6 +150,22 @@ export function roundTo(value: number, decimals = 2): number {
 }
 
 /**
+ * Resolves a Selling/Buying amount from its pricing method:
+ * 'fixed' → the amount as typed; 'freight_pmt' → Freight Rate × PMT.
+ */
+export function computePricingAmount(
+  method: 'fixed' | 'freight_pmt' | undefined,
+  fixedAmount: number,
+  freightRate?: number,
+  pmt?: number
+): number {
+  if (method === 'freight_pmt') {
+    return roundTo((freightRate || 0) * (pmt || 0), 2);
+  }
+  return roundTo(fixedAmount || 0, 2);
+}
+
+/**
  * Core Calculation Engine
  */
 export function calculateFreightProfit(

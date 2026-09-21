@@ -112,6 +112,23 @@ reload needed. These are plain suggestion lists, not linked by foreign key
 to your trip history, so renaming or removing one later never changes a
 past trip's saved record (it keeps its own copy of the name as text).
 
+### Core Trip Pricing: Pricing method & Single/Multiple Entry
+
+Selling Price and Buying Price each have a pricing-method toggle:
+- **Fixed Amount** — type the amount directly (the original behaviour).
+- **Freight × PMT** — enter a Freight Rate and PMT (tonnage/quantity); the
+  amount is calculated automatically as Freight Rate × PMT.
+
+A **Single Entry / Multiple Entry** toggle sits above the pricing fields:
+- **Single Entry** — one Selling/Buying price for the whole trip, as above.
+- **Multiple Entry** — enter as many vehicles as needed (Add Vehicle, +5,
+  +10 buttons; Remove per row), each with its own Vehicle Number, Truck
+  Type, and independent Selling/Buying pricing method. Total Selling,
+  Total Buying and Total Profit are summed automatically and fed straight
+  into the Key Financial Summary, Save, Print and every other feature —
+  switching modes updates the summary cards immediately, with no separate
+  save step needed for this to take effect.
+
 ### Print / PDF: hide the formulas
 
 On the Dashboard, a **"Show Formulas in Print/PDF"** checkbox controls

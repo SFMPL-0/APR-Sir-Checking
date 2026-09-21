@@ -31,10 +31,14 @@ import {
   InterestTranche,
   MasterDataItem,
   MasterDataKind,
+  PricingMethod,
   TdsRefundSettings,
+  VehiclePricingEntry,
 } from '../types';
 import { formatCurrency, formatPercent } from '../services/calculationEngine';
 import { SearchableSelect } from './SearchableSelect';
+import { PricingMethodField } from './PricingMethodField';
+import { MultiVehiclePricingPanel, vehicleAmounts } from './MultiVehiclePricingPanel';
 
 interface DashboardViewProps {
   input: CalculationInput;
@@ -85,15 +89,100 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // client without walking them through how the numbers were derived.
   const [showFormulas, setShowFormulas] = useState(true);
 
-  const handleSellingPriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value) || 0;
-    setInput((prev) => ({ ...prev, sellingPrice: val }));
+  const entryMode = input.vehicleEntryMode || 'single';
+
+  const setEntryMode = (mode: 'single' | 'multiple') => {
+    setInput((prev) => ({
+      ...prev,
+      vehicleEntryMode: mode,
+      vehicles:
+        mode === 'multiple' && (!prev.vehicles || prev.vehicles.length === 0)
+          ? Array.from({ length: 5 }, (_, i) => ({
+              id: 'veh_' + Date.now() + '_' + i,
+              vehicleNumber: '',
+              truckType: '',
+              sellingPricingMethod: 'fixed' as PricingMethod,
+              sellingAmount: 0,
+              buyingPricingMethod: 'fixed' as PricingMethod,
+              buyingAmount: 0,
+            }))
+          : prev.vehicles,
+    }));
   };
 
-  const handleBuyingPriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseFloat(e.target.value) || 0;
-    setInput((prev) => ({ ...prev, buyingPrice: val }));
-  };
+  // Multiple Entry: keep sellingPrice/buyingPrice (the values the whole app
+  // — Key Financial Summary, calculation engine, Save, Print — actually
+  // reads) in sync with the sum of all vehicle rows, automatically.
+  React.useEffect(() => {
+    if (entryMode !== 'multiple') return;
+    const totals = (input.vehicles || []).reduce(
+      (acc, v) => {
+        const { selling, buying } = vehicleAmounts(v);
+        return { selling: acc.selling + selling, buying: acc.buying + buying };
+      },
+      { selling: 0, buying: 0 }
+    );
+    if (totals.selling !== input.sellingPrice || totals.buying !== input.buyingPrice) {
+      setInput((prev) => ({
+        ...prev,
+        sellingPrice: totals.selling,
+        buyingPrice: totals.buying,
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryMode, input.vehicles]);
+
+  // Single Entry: Selling/Buying pricing-method handlers. sellingPrice /
+  // buyingPrice stay the canonical amount the rest of the app reads —
+  // when the method is Freight × PMT they're recomputed on every change.
+  const updateSellingMethod = (method: PricingMethod) =>
+    setInput((p) => ({
+      ...p,
+      sellingPricingMethod: method,
+      sellingPrice:
+        method === 'freight_pmt'
+          ? (p.sellingFreightRate || 0) * (p.sellingPmt || 0)
+          : p.sellingPrice,
+    }));
+  const updateSellingAmount = (amt: number) =>
+    setInput((p) => ({ ...p, sellingPrice: amt }));
+  const updateSellingFreightRate = (rate: number) =>
+    setInput((p) => ({
+      ...p,
+      sellingFreightRate: rate,
+      sellingPrice: rate * (p.sellingPmt || 0),
+    }));
+  const updateSellingPmt = (pmt: number) =>
+    setInput((p) => ({
+      ...p,
+      sellingPmt: pmt,
+      sellingPrice: (p.sellingFreightRate || 0) * pmt,
+    }));
+
+  const updateBuyingMethod = (method: PricingMethod) =>
+    setInput((p) => ({
+      ...p,
+      buyingPricingMethod: method,
+      buyingPrice:
+        method === 'freight_pmt'
+          ? (p.buyingFreightRate || 0) * (p.buyingPmt || 0)
+          : p.buyingPrice,
+    }));
+  const updateBuyingAmount = (amt: number) =>
+    setInput((p) => ({ ...p, buyingPrice: amt }));
+  const updateBuyingFreightRate = (rate: number) =>
+    setInput((p) => ({
+      ...p,
+      buyingFreightRate: rate,
+      buyingPrice: rate * (p.buyingPmt || 0),
+    }));
+  const updateBuyingPmt = (pmt: number) =>
+    setInput((p) => ({
+      ...p,
+      buyingPmt: pmt,
+      buyingPrice: (p.buyingFreightRate || 0) * pmt,
+    }));
+
 
   const handleDaysSlider = (days: number) => {
     setQuickDays(days);
@@ -216,48 +305,65 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-xs text-slate-400">Live Auto-calc</span>
           </div>
 
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Selling Price (Freight Charged to Client)
-              </label>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold">
-                  {generalSettings.currencySymbol}
-                </span>
-                <input
-                  id="input-selling-price"
-                  type="number"
-                  step="100"
-                  min="0"
-                  value={input.sellingPrice || ''}
-                  onChange={handleSellingPriceChange}
-                  className="w-full bg-slate-900/90 border border-slate-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl pl-8 pr-4 py-2.5 text-lg font-bold text-white tracking-wide"
-                  placeholder="51500"
-                />
-              </div>
-            </div>
+          {/* Vehicle Entry Mode Toggle */}
+          <div className="inline-flex bg-slate-950 border border-slate-700 rounded-xl p-1 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => setEntryMode('single')}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                entryMode === 'single' ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Single Entry
+            </button>
+            <button
+              type="button"
+              onClick={() => setEntryMode('multiple')}
+              className={`px-3 py-1.5 rounded-lg transition ${
+                entryMode === 'multiple' ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Multiple Entry
+            </button>
+          </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">
-                Buying Price (Vehicle Hire / Lorry Payment)
-              </label>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-semibold">
-                  {generalSettings.currencySymbol}
-                </span>
-                <input
-                  id="input-buying-price"
-                  type="number"
-                  step="100"
-                  min="0"
-                  value={input.buyingPrice || ''}
-                  onChange={handleBuyingPriceChange}
-                  className="w-full bg-slate-900/90 border border-slate-600 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl pl-8 pr-4 py-2.5 text-lg font-bold text-white tracking-wide"
-                  placeholder="48000"
+          <div className="space-y-3">
+            {entryMode === 'single' ? (
+              <>
+                <PricingMethodField
+                  label="Selling Price (Freight Charged to Client)"
+                  currencySymbol={generalSettings.currencySymbol}
+                  method={input.sellingPricingMethod || 'fixed'}
+                  amount={input.sellingPrice}
+                  freightRate={input.sellingFreightRate}
+                  pmt={input.sellingPmt}
+                  onMethodChange={updateSellingMethod}
+                  onAmountChange={updateSellingAmount}
+                  onFreightRateChange={updateSellingFreightRate}
+                  onPmtChange={updateSellingPmt}
                 />
-              </div>
-            </div>
+                <PricingMethodField
+                  label="Buying Price (Vehicle Hire / Lorry Payment)"
+                  currencySymbol={generalSettings.currencySymbol}
+                  method={input.buyingPricingMethod || 'fixed'}
+                  amount={input.buyingPrice}
+                  freightRate={input.buyingFreightRate}
+                  pmt={input.buyingPmt}
+                  onMethodChange={updateBuyingMethod}
+                  onAmountChange={updateBuyingAmount}
+                  onFreightRateChange={updateBuyingFreightRate}
+                  onPmtChange={updateBuyingPmt}
+                />
+              </>
+            ) : (
+              <MultiVehiclePricingPanel
+                vehicles={input.vehicles || []}
+                onChange={(vehicles) => setInput((p) => ({ ...p, vehicles }))}
+                truckTypes={truckTypes}
+                onAddMasterData={onAddMasterData}
+                currencySymbol={generalSettings.currencySymbol}
+              />
+            )}
 
             <div className="grid grid-cols-2 gap-3 pt-1">
               <div>
@@ -298,14 +404,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 onAddNew={(name) => onAddMasterData('locations', name)}
                 placeholder="Destination"
               />
-              <SearchableSelect
-                label="Truck Type"
-                value={input.truckType || ''}
-                onChange={(v) => setInput((p) => ({ ...p, truckType: v }))}
-                options={truckTypes}
-                onAddNew={(name) => onAddMasterData('truck_types', name)}
-                placeholder="Search or add truck type…"
-              />
+              {entryMode === 'single' && (
+                <SearchableSelect
+                  label="Truck Type"
+                  value={input.truckType || ''}
+                  onChange={(v) => setInput((p) => ({ ...p, truckType: v }))}
+                  options={truckTypes}
+                  onAddNew={(name) => onAddMasterData('truck_types', name)}
+                  placeholder="Search or add truck type…"
+                />
+              )}
             </div>
           </div>
         </div>

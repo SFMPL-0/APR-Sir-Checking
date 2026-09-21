@@ -56,6 +56,12 @@ export interface GeneralSettings {
   activeMode: 'quick' | 'detailed' | 'scenario';
 }
 
+// Core Trip Pricing: how a Selling/Buying amount is derived.
+// 'fixed' = user types the amount directly.
+// 'freight_pmt' = amount is auto-calculated as Freight Rate × PMT (per
+// metric ton rate × tonnage/quantity).
+export type PricingMethod = 'fixed' | 'freight_pmt';
+
 export interface CalculationInput {
   sellingPrice: number;
   buyingPrice: number;
@@ -69,6 +75,37 @@ export interface CalculationInput {
   fromLocation?: string;
   toLocation?: string;
   truckType?: string;
+  // Single Entry pricing method for Selling/Buying Price. sellingPrice /
+  // buyingPrice above always hold the final amount actually used by the
+  // calculation engine — when the method is 'freight_pmt' they're kept in
+  // sync automatically (freightRate × pmt) by the Dashboard.
+  sellingPricingMethod?: PricingMethod;
+  sellingFreightRate?: number;
+  sellingPmt?: number;
+  buyingPricingMethod?: PricingMethod;
+  buyingFreightRate?: number;
+  buyingPmt?: number;
+  // Multiple Entry: when set to 'multiple', sellingPrice/buyingPrice above
+  // are auto-computed as the sum of every row in `vehicles` instead of
+  // being edited directly.
+  vehicleEntryMode?: 'single' | 'multiple';
+  vehicles?: VehiclePricingEntry[];
+}
+
+// One vehicle's full pricing details inside Multiple Entry mode. Each has
+// its own pricing method per side (Fixed Amount or Freight × PMT).
+export interface VehiclePricingEntry {
+  id: string;
+  vehicleNumber: string;
+  truckType?: string;
+  sellingPricingMethod: PricingMethod;
+  sellingAmount: number; // final amount, kept in sync with method below
+  sellingFreightRate?: number;
+  sellingPmt?: number;
+  buyingPricingMethod: PricingMethod;
+  buyingAmount: number;
+  buyingFreightRate?: number;
+  buyingPmt?: number;
 }
 
 export interface InterestCalculationDetail {

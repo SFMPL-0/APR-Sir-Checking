@@ -11,7 +11,7 @@ import { createClient } from '@supabase/supabase-js';
 // of hard-coding them.
 const SUPABASE_URL =
   (import.meta as any).env?.VITE_SUPABASE_URL ||
-  'https://oafjuhjnnddgegjzvghw.supabase.co';
+  'https://oafjuhjnnddgegjzvghw.supabase.co;
 
 const SUPABASE_ANON_KEY =
   (import.meta as any).env?.VITE_SUPABASE_ANON_KEY ||
