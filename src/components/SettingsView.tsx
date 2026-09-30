@@ -4,6 +4,7 @@ import {
   Check,
   DollarSign,
   HelpCircle,
+  Lock,
   Percent,
   Plus,
   RefreshCw,
@@ -27,6 +28,7 @@ import {
   DEFAULT_TDS_SETTINGS,
   formatCurrency,
 } from '../services/calculationEngine';
+import { isPinUnlocked, setPinUnlocked, PinPrompt } from './PinPrompt';
 
 interface SettingsViewProps {
   expenses: ExpenseItem[];
@@ -51,6 +53,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   setGeneralSettings,
   initialSection,
 }) => {
+  const [unlocked, setUnlocked] = useState(isPinUnlocked());
   const [activeTab, setActiveTab] = useState<
     'expenses' | 'interest' | 'tds' | 'general'
   >(
@@ -152,6 +155,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
+  if (!unlocked) {
+    return (
+      <div className="space-y-6 pb-20">
+        <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-5 shadow-lg">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-400">
+            <Sliders className="w-4 h-4" />
+            <span>Fully Configurable Calculation Engine</span>
+          </div>
+          <h1 className="text-xl md:text-2xl font-bold text-white mt-1">
+            Engine Rules & Parameters
+          </h1>
+          <p className="text-sm text-slate-400">
+            Security PIN required to configure engine rules, interest tranches, and statutory parameters.
+          </p>
+        </div>
+
+        <PinPrompt
+          mode="inline"
+          title="Engine Profiles & Rules Security"
+          subtitle="Enter 4-digit PIN (1991) to access calculation engine settings and tax parameters."
+          onSuccess={() => setUnlocked(true)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 pb-20">
       {/* Top Header */}
@@ -170,13 +199,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </p>
           </div>
 
-          <button
-            onClick={handleResetToExcelDefaults}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Reset to Excel Defaults</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPinUnlocked(false);
+                setUnlocked(false);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition"
+              title="Lock with PIN 1991"
+            >
+              <Lock className="w-3.5 h-3.5 text-amber-400" />
+              <span>Lock Engine</span>
+            </button>
+            <button
+              onClick={handleResetToExcelDefaults}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Reset to Excel Defaults</span>
+            </button>
+          </div>
         </div>
 
         {/* Tab Pills */}
@@ -200,7 +243,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             }`}
           >
             <span>Interest Portions ({interestTranches.length})</span>
-            {Math.abs(totalAllocation - 100) > 0.01 && (
+            {interestTranches.length > 0 && Math.abs(totalAllocation - 100) > 0.01 && (
               <span className="w-2 h-2 rounded-full bg-rose-400" />
             )}
           </button>
@@ -327,12 +370,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <input
                           type="number"
                           step="100"
+                          min="0"
                           value={exp.fixedAmount}
                           onChange={(e) =>
                             handleUpdateExpense(
                               exp.id,
                               'fixedAmount',
-                              parseFloat(e.target.value) || 0
+                              Math.max(0, parseFloat(e.target.value) || 0)
                             )
                           }
                           className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-6 pr-2 py-1 text-xs text-white font-mono font-bold"
@@ -388,7 +432,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 Interest Portions & Credit Settings
               </h2>
               <p className="text-xs text-slate-400">
-                Excel logic defaults to 75% portion @ 1% for 20 days and 25% portion @ 1% for 20 days. You can change allocations (e.g. 60% / 40%, 80% / 20%), interest rates, and days freely.
+                In your latest Excel P&L sheet, interest is unified into the &quot;Interest on 30 Days&quot; expense row (flat 1% of Selling Price). If you ever need custom split tranches, you can add them below.
               </p>
             </div>
             <button
@@ -401,7 +445,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {/* Allocation Validation Alert */}
-          {Math.abs(totalAllocation - 100) > 0.01 && (
+          {interestTranches.length > 0 && Math.abs(totalAllocation - 100) > 0.01 && (
             <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl text-rose-200 text-xs flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
               <span>
@@ -410,7 +454,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           )}
 
-          <div className="space-y-3">
+          {interestTranches.length === 0 ? (
+            <div className="p-6 bg-slate-900/60 border border-slate-700/80 rounded-xl text-center space-y-2">
+              <p className="text-xs text-slate-200 font-bold">
+                No split tranches active
+              </p>
+              <p className="text-[11px] text-slate-400 max-w-md mx-auto">
+                Interest is computed flat as &quot;Interest on 30 Days&quot; (1.0% of Selling Price) under Expense Rules, matching your current Excel P&L model without legacy 75%/25% split tranches.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
             {interestTranches.map((tranche, idx) => (
               <div
                 key={tranche.id}
@@ -539,6 +593,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             ))}
           </div>
+        )}
         </div>
       )}
 

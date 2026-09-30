@@ -543,12 +543,16 @@ export default function App() {
     if (profile.generalSettings) {
       setGeneralSettings(JSON.parse(JSON.stringify(profile.generalSettings)));
     }
+    const paymentDays = profile.paymentTermsDays ?? profile.generalSettings?.defaultDays ?? 30;
+    const interestRate = profile.interestRate ?? profile.generalSettings?.defaultInterestRate ?? 1.0;
     setInput((prev) => ({
       ...prev,
       clientName: profile.name,
       companyProfileId: profile.id,
-      customDays: profile.paymentTermsDays ?? prev.customDays,
-      customInterestRate: profile.interestRate ?? prev.customInterestRate,
+      customDays: paymentDays,
+      creditPeriodDays: paymentDays,
+      customInterestRate: interestRate,
+      annualInterestRate: interestRate,
     }));
   };
 
@@ -583,16 +587,18 @@ export default function App() {
   };
 
   const handleSaveCurrentToCompanyProfile = async (companyIdOrName: string) => {
+    let targetName = '';
     const updated = companyProfiles.map((p) => {
       if (p.id === companyIdOrName || p.name.toLowerCase() === companyIdOrName.toLowerCase()) {
+        targetName = p.name;
         return {
           ...p,
           expenses: JSON.parse(JSON.stringify(expenses)),
           interestTranches: JSON.parse(JSON.stringify(interestTranches)),
           tdsSettings: JSON.parse(JSON.stringify(tdsSettings)),
           generalSettings: JSON.parse(JSON.stringify(generalSettings)),
-          paymentTermsDays: input.customDays ?? p.paymentTermsDays,
-          interestRate: input.customInterestRate ?? p.interestRate,
+          paymentTermsDays: input.creditPeriodDays ?? input.customDays ?? p.paymentTermsDays ?? 30,
+          interestRate: input.annualInterestRate ?? input.customInterestRate ?? p.interestRate ?? 1.0,
           updatedAt: new Date().toISOString(),
         };
       }
@@ -600,7 +606,7 @@ export default function App() {
     });
     setCompanyProfiles(updated);
     await saveCompanyProfiles(updated);
-    alert(`Updated company profile settings with current calculator engine!`);
+    return { success: true, profileName: targetName };
   };
 
   // Core Trip Pricing: add a new Client/Truck Type/Location suggestion,
@@ -717,6 +723,7 @@ export default function App() {
             setInput={setInput}
             result={result}
             expenses={expenses}
+            setExpenses={setExpenses}
             interestTranches={interestTranches}
             tdsSettings={tdsSettings}
             generalSettings={generalSettings}
@@ -765,6 +772,7 @@ export default function App() {
         {activeTab === 'details' && (
           <CalculationDetailsView
             input={input}
+            setInput={setInput}
             result={result}
             expenses={expenses}
             interestTranches={interestTranches}

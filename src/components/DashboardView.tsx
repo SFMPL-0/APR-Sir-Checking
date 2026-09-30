@@ -38,6 +38,7 @@ import {
   TdsRefundSettings,
 } from '../types';
 import { formatCurrency, formatPercent } from '../services/calculationEngine';
+import { isPinUnlocked, PinPrompt } from './PinPrompt';
 import { SearchableSelect } from './SearchableSelect';
 import { PricingMethodField } from './PricingMethodField';
 import { MultiVehiclePricingPanel, vehicleAmounts } from './MultiVehiclePricingPanel';
@@ -47,6 +48,7 @@ interface DashboardViewProps {
   setInput: React.Dispatch<React.SetStateAction<CalculationInput>>;
   result: CalculationResult;
   expenses: ExpenseItem[];
+  setExpenses?: React.Dispatch<React.SetStateAction<ExpenseItem[]>>;
   interestTranches: InterestTranche[];
   tdsSettings: TdsRefundSettings;
   generalSettings: GeneralSettings;
@@ -73,6 +75,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   setInput,
   result,
   expenses,
+  setExpenses,
   interestTranches,
   tdsSettings,
   generalSettings,
@@ -90,15 +93,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onSaveCurrentToCompanyProfile,
   onOpenCompanyProfilesModal,
 }) => {
-  const [quickDays, setQuickDays] = useState<number>(input.customDays ?? 20);
+  const [quickDays, setQuickDays] = useState<number>(input.creditPeriodDays ?? input.customDays ?? 30);
   const [quickRate, setQuickRate] = useState<number>(
-    input.customInterestRate ?? 1.0
+    input.annualInterestRate ?? input.customInterestRate ?? 1.0
   );
   // When off, printed/exported reports drop the "Formula / Basis" column
   // and show only the final amounts — a clean statement for handing to a
   // client without walking them through how the numbers were derived.
   const [showFormulas, setShowFormulas] = useState(true);
   const [profileSyncNotice, setProfileSyncNotice] = useState<string | null>(null);
+  const [showPinPrompt, setShowPinPrompt] = useState(false);
 
   // Single Entry: Selling/Buying pricing-method handlers. sellingPrice /
   // buyingPrice stay the canonical amount the rest of the app reads —
@@ -153,23 +157,101 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const handleDaysSlider = (days: number) => {
     setQuickDays(days);
-    setInput((prev) => ({ ...prev, customDays: days }));
+    setInput((prev) => ({
+      ...prev,
+      customDays: days,
+      creditPeriodDays: days,
+    }));
   };
 
   const handleRateSlider = (rate: number) => {
     setQuickRate(rate);
-    setInput((prev) => ({ ...prev, customInterestRate: rate }));
+    setInput((prev) => ({
+      ...prev,
+      customInterestRate: rate,
+      annualInterestRate: rate,
+    }));
+    if (setExpenses) {
+      setExpenses((prev) =>
+        prev.map((e) =>
+          e.id === 'exp-interest' || e.name.toLowerCase().includes('interest on')
+            ? { ...e, percentage: rate }
+            : e
+        )
+      );
+    }
   };
 
   const resetQuickSliders = () => {
-    setQuickDays(20);
-    setQuickRate(1.0);
-    setInput((prev) => {
-      const copy = { ...prev };
-      delete copy.customDays;
-      delete copy.customInterestRate;
-      return copy;
-    });
+    const defaultD = activeCompanyProfile?.paymentTermsDays || generalSettings.defaultDays || 30;
+    const defaultR = activeCompanyProfile?.interestRate || generalSettings.defaultInterestRate || 1.0;
+    setQuickDays(defaultD);
+    setQuickRate(defaultR);
+    setInput((prev) => ({
+      ...prev,
+      customDays: defaultD,
+      creditPeriodDays: defaultD,
+      customInterestRate: defaultR,
+      annualInterestRate: defaultR,
+    }));
+    if (setExpenses) {
+      setExpenses((prev) =>
+        prev.map((e) =>
+          e.id === 'exp-interest' || e.name.toLowerCase().includes('interest on')
+            ? { ...e, percentage: defaultR }
+            : e
+        )
+      );
+    }
+  };
+
+  const handleSaveFinAdjustersToProfile = async () => {
+    if (!activeCompanyProfile || !onSaveCurrentToCompanyProfile) return;
+    if (!isPinUnlocked()) {
+      setShowPinPrompt(true);
+      return;
+    }
+    await onSaveCurrentToCompanyProfile(activeCompanyProfile.id);
+    setProfileSyncNotice(`✓ Saved ${quickDays}d credit & ${quickRate}% interest to ${activeCompanyProfile.name} profile!`);
+    setTimeout(() => setProfileSyncNotice(null), 3500);
+  };
+
+  const handlePinSuccessForSave = async () => {
+    setShowPinPrompt(false);
+    if (!activeCompanyProfile || !onSaveCurrentToCompanyProfile) return;
+    await onSaveCurrentToCompanyProfile(activeCompanyProfile.id);
+    setProfileSyncNotice(`✓ Saved ${quickDays}d credit & ${quickRate}% interest to ${activeCompanyProfile.name} profile!`);
+    setTimeout(() => setProfileSyncNotice(null), 3500);
+  };
+
+  const handleToggleExpense = (id: string) => {
+    if (!setExpenses) return;
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, enabled: !e.enabled } : e))
+    );
+  };
+
+  const handleUpdateExpenseName = (id: string, name: string) => {
+    if (!setExpenses) return;
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, name } : e))
+    );
+  };
+
+  const handleUpdateExpenseRate = (id: string, percentage: number) => {
+    if (!setExpenses) return;
+    setExpenses((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, percentage } : e))
+    );
+  };
+
+  const handleUpdateExpenseFixed = (id: string, fixedAmount: number) => {
+    if (!setExpenses) return;
+    setExpenses((prev) =>
+      prev.map((e) =>
+        e.id === id ? { ...e, fixedAmount: Math.max(0, fixedAmount) } : e
+      )
+    );
   };
 
   const handleSelectClient = (clientName: string) => {
@@ -271,6 +353,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   }, [entryMode, input.vehicles, input.sellingPrice, input.buyingPrice, setInput]);
 
+  // Keep quickDays and quickRate in sync when input changes (e.g. from client profile selection)
+  React.useEffect(() => {
+    if (input.creditPeriodDays !== undefined && input.creditPeriodDays !== quickDays) {
+      setQuickDays(input.creditPeriodDays);
+    }
+  }, [input.creditPeriodDays]);
+
+  React.useEffect(() => {
+    const rate = input.annualInterestRate ?? input.customInterestRate;
+    if (rate !== undefined && rate !== quickRate) {
+      setQuickRate(rate);
+    }
+  }, [input.annualInterestRate, input.customInterestRate]);
+
   return (
     <div className="space-y-6 pb-20">
       {/* Top Banner with Quick Actions */}
@@ -363,15 +459,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Main Revenue Inputs & Quick Adjusters */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Left: Input Card */}
-        <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Left / Main: Core Trip Pricing & Integrated Fast Fin-Adjusters */}
+        <div className="lg:col-span-8 bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <DollarSign className="w-4 h-4 text-emerald-400" />
-              <span>Core Trip Pricing</span>
+              <span>Core Trip Pricing & Commercial Engine</span>
             </h2>
-            <span className="text-xs text-slate-400">Live Auto-calc</span>
+            <div className="flex items-center gap-2">
+              {activeCompanyProfile && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                  Profile: {activeCompanyProfile.name}
+                </span>
+              )}
+              <span className="text-xs text-slate-400">Live Auto-calc</span>
+            </div>
           </div>
 
           {/* Truck Entry Mode Toggle: Single Truck Entry vs Multiple Truck Entry */}
@@ -412,7 +515,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </span>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-3.5">
             {entryMode === 'single' ? (
               <>
                 <PricingMethodField
@@ -481,6 +584,163 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               />
             )}
 
+            {/* Fast Fin-Adjusters (Direct Pricing Integration) */}
+            <div className="bg-gradient-to-r from-blue-950/40 via-slate-900/60 to-indigo-950/40 border border-blue-500/40 rounded-xl p-3.5 space-y-3 shadow-inner">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 border-b border-slate-700/60 pb-2">
+                <div className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-blue-400" />
+                  <span className="text-xs font-bold text-white">
+                    Fast Fin-Adjusters (Direct Pricing Impact)
+                  </span>
+                  {activeCompanyProfile && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                      {activeCompanyProfile.name}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {activeCompanyProfile && onSaveCurrentToCompanyProfile && (
+                    <button
+                      type="button"
+                      onClick={handleSaveFinAdjustersToProfile}
+                      className="text-[10px] text-amber-300 hover:text-amber-200 font-bold bg-amber-500/20 hover:bg-amber-500/30 px-2 py-0.5 rounded border border-amber-500/40 transition flex items-center gap-1"
+                      title="Save current payment days and interest rate back into this client profile"
+                    >
+                      <Save className="w-3 h-3" />
+                      <span>Save to Client Profile</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={resetQuickSliders}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 flex items-center gap-1"
+                    title="Reset to client profile or general engine defaults"
+                  >
+                    <RefreshCw className="w-2.5 h-2.5" />
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 1. Payment Cycle / Credit Days */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="text-slate-300 font-medium">Payment Terms / Credit</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-amber-400 font-bold text-xs font-mono">
+                        {quickDays} Days
+                      </span>
+                      {result.creditPeriodDueDate && (
+                        <span className="text-[10px] text-cyan-400 bg-cyan-950/40 px-1.5 py-0.5 rounded border border-cyan-800/40 font-mono">
+                          Due: {result.creditPeriodDueDate}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="120"
+                    value={quickDays}
+                    onChange={(e) => handleDaysSlider(parseInt(e.target.value))}
+                    className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400 mt-1 flex-wrap gap-1">
+                    {[
+                      { d: 7, l: '7d Spot' },
+                      { d: 15, l: '15d Express' },
+                      { d: 20, l: '20d' },
+                      { d: 30, l: '30d (Std)' },
+                      { d: 45, l: '45d' },
+                      { d: 60, l: '60d' },
+                      { d: 90, l: '90d' },
+                    ].map(({ d, l }) => (
+                      <span
+                        key={d}
+                        onClick={() => handleDaysSlider(d)}
+                        className={`cursor-pointer px-1 py-0.5 rounded transition ${
+                          quickDays === d
+                            ? 'text-amber-300 font-bold bg-amber-500/20'
+                            : 'hover:text-white'
+                        }`}
+                      >
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Financing Interest Rate */}
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="text-slate-300 font-medium">Financing Interest Rate</span>
+                    <span className="text-blue-400 font-bold text-xs font-mono">
+                      {quickRate.toFixed(2)}% p.a.
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="5"
+                    step="0.05"
+                    value={quickRate}
+                    onChange={(e) => handleRateSlider(parseFloat(e.target.value))}
+                    className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400 mt-1 flex-wrap gap-1">
+                    {[
+                      { r: 0.5, l: '0.5%' },
+                      { r: 1.0, l: '1.0% (Std)' },
+                      { r: 1.5, l: '1.5%' },
+                      { r: 2.0, l: '2.0%' },
+                      { r: 3.0, l: '3.0%' },
+                    ].map(({ r, l }) => (
+                      <span
+                        key={r}
+                        onClick={() => handleRateSlider(r)}
+                        className={`cursor-pointer px-1 py-0.5 rounded transition ${
+                          Math.abs(quickRate - r) < 0.01
+                            ? 'text-blue-300 font-bold bg-blue-500/20'
+                            : 'hover:text-white'
+                        }`}
+                      >
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Real-time Pricing Impact Strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-[11px]">
+                <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                  <span className="text-slate-400 block text-[10px]">Trip Financing Cost</span>
+                  <span className="font-mono font-bold text-amber-400">
+                    {formatCurrency(result.totalInterest, generalSettings.currencySymbol)}
+                  </span>
+                </div>
+                <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                  <span className="text-slate-400 block text-[10px]">Net Freight Realized</span>
+                  <span className="font-mono font-bold text-emerald-300">
+                    {formatCurrency(result.sellingPrice - result.totalInterest, generalSettings.currencySymbol)}
+                  </span>
+                </div>
+                <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                  <span className="text-slate-400 block text-[10px]">TDS Deduction (2%)</span>
+                  <span className="font-mono font-bold text-slate-300">
+                    {formatCurrency(result.tdsRefund.nominalTdsAmount, generalSettings.currencySymbol)}
+                  </span>
+                </div>
+                <div className="bg-slate-950/60 p-2 rounded-lg border border-slate-800">
+                  <span className="text-slate-400 block text-[10px]">Spread Post-Financing</span>
+                  <span className="font-mono font-bold text-cyan-300">
+                    {formatCurrency(result.grossProfit - result.totalInterest, generalSettings.currencySymbol)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-700/60">
               {/* Trip / LR No. */}
               <div className="col-span-2 sm:col-span-1">
@@ -538,7 +798,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <option value="">-- Select Company Profile (Client) --</option>
                   {companyProfiles.map((cp) => (
                     <option key={cp.id} value={cp.name}>
-                      {cp.name} ({cp.paymentTermsDays || 20}d credit, {cp.interestRate || 1}% int, {cp.tdsSettings?.nominalTdsRate || 2}% TDS)
+                      {cp.name} ({cp.paymentTermsDays || 30}d credit, {cp.interestRate || 1}% int, {cp.tdsSettings?.nominalTdsRate || 2}% TDS)
                     </option>
                   ))}
                   {clients
@@ -559,18 +819,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {activeCompanyProfile && (
                   <div className="mt-1.5 p-2 rounded-lg bg-slate-950/80 border border-amber-500/30 text-[11px] text-slate-300 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                     <div>
-                      <span className="text-amber-400 font-semibold">Engine Applied: </span>
-                      <span>{activeCompanyProfile.paymentTermsDays || 20}d credit • {activeCompanyProfile.interestRate || 1}% interest • {activeCompanyProfile.tdsSettings?.nominalTdsRate || 2}% TDS</span>
+                      <span className="text-amber-400 font-semibold">Engine Profile Active: </span>
+                      <span>{activeCompanyProfile.paymentTermsDays || 30}d credit • {activeCompanyProfile.interestRate || 1}% interest • {activeCompanyProfile.tdsSettings?.nominalTdsRate || 2}% TDS</span>
                     </div>
                     {onSaveCurrentToCompanyProfile && (
                       <button
                         type="button"
-                        onClick={() => onSaveCurrentToCompanyProfile(activeCompanyProfile.id)}
-                        className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-200 font-bold bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 shrink-0 self-start sm:self-auto"
-                        title="Save any adjustments in Engine Settings back into this client's profile"
+                        onClick={handleSaveFinAdjustersToProfile}
+                        className="inline-flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-200 font-bold bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/40 shrink-0 self-start sm:self-auto transition"
+                        title="Save current Fin-Adjusters directly back into this client's profile"
                       >
                         <Save className="w-3 h-3" />
-                        <span>Update Profile Settings</span>
+                        <span>Save to Client Profile</span>
                       </button>
                     )}
                   </div>
@@ -599,149 +859,96 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 onAddNew={(name) => onAddMasterData('locations', name)}
                 placeholder="Destination"
               />
-            </div>
-          </div>
-        </div>
 
-        {/* Middle: Quick Sliders for Days & Interest */}
-        <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-blue-400" />
-              <span>Fast Fin-Adjusters</span>
-            </h2>
-            <button
-              onClick={resetQuickSliders}
-              className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
-            >
-              <RefreshCw className="w-3 h-3" />
-              <span>Reset</span>
-            </button>
-          </div>
+              {/* Trip Timing & Dates */}
+              <div className="col-span-2 pt-2 border-t border-slate-700/60 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Trip Timing & TDS Model Dates</span>
+                  </label>
+                  <span className="text-[10px] text-slate-400">P&L Date Controls</span>
+                </div>
 
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between text-xs mb-1.5">
-                <span className="text-slate-300 font-medium">Payment Cycle / Days</span>
-                <span className="text-amber-400 font-bold text-sm">
-                  {quickDays} Days
-                </span>
-              </div>
-              <input
-                type="range"
-                min="1"
-                max="120"
-                value={quickDays}
-                onChange={(e) => handleDaysSlider(parseInt(e.target.value))}
-                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-                <span
-                  onClick={() => handleDaysSlider(7)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  7d
-                </span>
-                <span
-                  onClick={() => handleDaysSlider(15)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  15d
-                </span>
-                <span
-                  onClick={() => handleDaysSlider(20)}
-                  className="cursor-pointer text-amber-400 font-semibold"
-                >
-                  20d (Default)
-                </span>
-                <span
-                  onClick={() => handleDaysSlider(45)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  45d
-                </span>
-                <span
-                  onClick={() => handleDaysSlider(60)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  60d
-                </span>
-                <span
-                  onClick={() => handleDaysSlider(90)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  90d
-                </span>
-              </div>
-            </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {/* LR Date */}
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                      LR Date (Lorry Receipt)
+                    </label>
+                    <input
+                      type="date"
+                      value={input.lrDate || ''}
+                      onChange={(e) =>
+                        setInput((p) => ({ ...p, lrDate: e.target.value }))
+                      }
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-blue-500"
+                    />
+                  </div>
 
-            <div>
-              <div className="flex justify-between text-xs mb-1.5">
-                <span className="text-slate-300 font-medium">Interest Rate (p.a.)</span>
-                <span className="text-blue-400 font-bold text-sm">
-                  {quickRate.toFixed(2)}%
-                </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="5"
-                step="0.1"
-                value={quickRate}
-                onChange={(e) => handleRateSlider(parseFloat(e.target.value))}
-                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-                <span
-                  onClick={() => handleRateSlider(0.5)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  0.5%
-                </span>
-                <span
-                  onClick={() => handleRateSlider(1.0)}
-                  className="cursor-pointer text-blue-400 font-semibold"
-                >
-                  1.0% (Default)
-                </span>
-                <span
-                  onClick={() => handleRateSlider(1.5)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  1.5%
-                </span>
-                <span
-                  onClick={() => handleRateSlider(2.0)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  2.0%
-                </span>
-                <span
-                  onClick={() => handleRateSlider(3.0)}
-                  className="cursor-pointer hover:text-white"
-                >
-                  3.0%
-                </span>
+                  {/* Financial Year End Date & TDS Refund Period */}
+                  <div className="p-2 rounded-lg bg-slate-950/70 border border-amber-500/30 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-semibold text-slate-400">
+                        FY End Date
+                      </label>
+                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold">
+                        Auto TDS
+                      </span>
+                    </div>
+                    <input
+                      type="date"
+                      value={input.financialYearEndDate || ''}
+                      onChange={(e) =>
+                        setInput((p) => ({
+                          ...p,
+                          financialYearEndDate: e.target.value,
+                        }))
+                      }
+                      className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:border-amber-500"
+                    />
+                    <div className="flex items-center justify-between text-[10px] pt-0.5">
+                      <span className="text-slate-400">TDS Refund Period:</span>
+                      <span className="font-mono font-bold text-amber-300">
+                        {result.tdsRefundPeriodMonths !== undefined
+                          ? `${result.tdsRefundPeriodMonths} mos`
+                          : '18 mos'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Validation warning if FY End Date < LR Date */}
+                {input.lrDate &&
+                  input.financialYearEndDate &&
+                  input.financialYearEndDate < input.lrDate && (
+                    <div className="p-2 bg-rose-950/40 border border-rose-500/40 rounded-lg text-rose-300 text-[11px] flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                      <span>
+                        FY End Date is earlier than LR Date. TDS refund period cannot be negative.
+                      </span>
+                    </div>
+                  )}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Right: Quick Margin Gauge / Health */}
-        <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
+        {/* Right: Quick Margin Gauge & Yield Health */}
+        <div className="lg:col-span-4 bg-slate-800/90 border border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col justify-between space-y-4">
           <div>
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Profit Margin Pulse
               </span>
               <span
-                className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
                   result.profitAfterTax >= 0
                     ? 'bg-emerald-500/20 text-emerald-300'
                     : 'bg-rose-500/20 text-rose-300'
                 }`}
               >
-                {result.profitAfterTax >= 0 ? 'Profitable' : 'Loss Trip'}
+                {result.profitAfterTax >= 0 ? 'Profitable Trip' : 'Loss Trip'}
               </span>
             </div>
             <div className="text-3xl font-black text-white">
@@ -752,19 +959,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </p>
           </div>
 
-          <div className="mt-4 pt-3 border-t border-slate-700/80 space-y-2">
-            <div className="flex justify-between text-xs">
-              <span className="text-slate-400">Net Profit (with TDS):</span>
-              <span className="font-bold text-amber-400 font-mono">
-                {formatCurrency(result.tdsRefund.netProfitWithTdsSaving, generalSettings.currencySymbol)}
-              </span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span className="text-slate-400">% Profit After TDS Saving:</span>
-              <span className="font-black text-cyan-300 font-mono">
-                {formatPercent(result.tdsRefund.percentageOfProfitAfterTdsSaving, 2)}
-              </span>
-            </div>
+          <div className="pt-3 border-t border-slate-700/80 space-y-2.5">
             <div className="flex justify-between text-xs">
               <span className="text-slate-400">Gross Margin:</span>
               <span className="font-semibold text-slate-200 font-mono">
@@ -772,12 +967,103 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </span>
             </div>
             <div className="flex justify-between text-xs">
-              <span className="text-slate-400">Tax Liability (27%):</span>
-              <span className="font-semibold text-rose-300 font-mono">
-                {formatCurrency(result.incomeTax, generalSettings.currencySymbol)}
+              <span className="text-slate-400">Financing Interest:</span>
+              <span className="font-semibold text-blue-300 font-mono">
+                {formatCurrency(result.totalInterest, generalSettings.currencySymbol)}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Net Profit (PAT):</span>
+              <span className="font-bold text-amber-400 font-mono">
+                {formatCurrency(result.profitAfterTax, generalSettings.currencySymbol)}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Net Saving in TDS:</span>
+              <span className="font-semibold text-amber-300 font-mono">
+                {formatCurrency(result.tdsRefund.netSavingInTds, generalSettings.currencySymbol)}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs pt-1 border-t border-slate-700/50">
+              <span className="text-slate-300 font-bold">Total Benefit:</span>
+              <span className="font-black text-emerald-300 font-mono text-sm">
+                {formatCurrency(result.totalBenefit ?? (result.profitAfterTax + result.tdsRefund.netSavingInTds), generalSettings.currencySymbol)}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">% To Sales (Rounded):</span>
+              <span className="font-black text-cyan-300 font-mono">
+                {result.percentToSales ?? (result.sellingPrice > 0 ? Math.round(((result.totalBenefit ?? 0) / result.sellingPrice) * 100) : 0)}%
               </span>
             </div>
           </div>
+
+          {/* Quick Action buttons */}
+          <div className="pt-3 border-t border-slate-700/80 grid grid-cols-2 gap-2">
+            <button
+              onClick={onSaveCalculation}
+              className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow transition flex items-center justify-center gap-1.5"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Save Trip</span>
+            </button>
+            <button
+              onClick={() => onNavigateTab('details')}
+              className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-650 text-white text-xs font-bold transition flex items-center justify-center gap-1.5"
+            >
+              <span>Full Audit</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Client-Wise Savings & Statutory Engine Ribbon */}
+      <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-4 sm:p-5 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0">
+            <Building2 className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold text-white">Client Savings & Engine Profile Rules</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
+                Client-Wise Optimized
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Trip operating expenses (TDS 2%, Interest 1%, Salaries, Management, Commission, Consultation, HO, Other) are pre-configured client-wise. Savings and carrying recovery are built directly into trip net yields.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          {onOpenCompanyProfilesModal && (
+            <button
+              type="button"
+              onClick={onOpenCompanyProfilesModal}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 hover:border-slate-600 transition"
+            >
+              <Building2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>Client Profiles</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onNavigateTab('settings')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-750 text-slate-200 text-xs font-semibold border border-slate-700 hover:border-slate-600 transition"
+          >
+            <Sliders className="w-3.5 h-3.5 text-blue-400" />
+            <span>Engine Settings</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('details')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-md transition"
+          >
+            <span>Full Audit & Breakdown</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
@@ -1114,6 +1400,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
       </div>
+
+      {showPinPrompt && (
+        <PinPrompt
+          mode="modal"
+          title="Clients & Engine Profiles Security"
+          subtitle="Enter 4-digit PIN (1991) to update and save client profile settings."
+          onSuccess={handlePinSuccessForSave}
+          onCancel={() => setShowPinPrompt(false)}
+        />
+      )}
     </div>
   );
 };

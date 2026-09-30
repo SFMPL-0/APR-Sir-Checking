@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Edit2,
   FileText,
+  Lock,
   Percent,
   Plus,
   Save,
@@ -29,6 +30,7 @@ import {
   DEFAULT_INTEREST_TRANCHES,
   DEFAULT_TDS_SETTINGS,
 } from '../services/calculationEngine';
+import { isPinUnlocked, setPinUnlocked, PinPrompt } from './PinPrompt';
 
 interface CompanyProfilesModalProps {
   isOpen: boolean;
@@ -88,8 +90,21 @@ export const CompanyProfilesModal: React.FC<CompanyProfilesModalProps> = ({
 
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [unlocked, setUnlocked] = useState(isPinUnlocked());
 
   if (!isOpen) return null;
+
+  if (!unlocked) {
+    return (
+      <PinPrompt
+        mode="modal"
+        title="Clients & Engine Profiles Security"
+        subtitle="Enter 4-digit PIN (1991) to access client profiles and engine configurations."
+        onSuccess={() => setUnlocked(true)}
+        onCancel={onClose}
+      />
+    );
+  }
 
   const filteredProfiles = profiles.filter((p) => {
     const q = searchQuery.toLowerCase();
@@ -259,12 +274,26 @@ export const CompanyProfilesModal: React.FC<CompanyProfilesModalProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setPinUnlocked(false);
+                setUnlocked(false);
+              }}
+              className="p-1.5 text-slate-400 hover:text-amber-400 rounded-lg hover:bg-slate-800 transition flex items-center gap-1 text-xs font-semibold"
+              title="Lock with PIN 1991"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Lock</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Status banner if any */}
