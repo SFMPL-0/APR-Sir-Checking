@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  DollarSign,
   Edit2,
   FileText,
   Lock,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react';
 import {
   CompanyProfile,
+  ExpenseBasis,
   ExpenseItem,
   GeneralSettings,
   InterestTranche,
@@ -417,6 +419,41 @@ export const CompanyProfilesModal: React.FC<CompanyProfilesModalProps> = ({
                             </div>
                           </div>
 
+                          {/* Configured Expense Rules Summary (Fixed & Percentage) */}
+                          {profile.expenses && profile.expenses.length > 0 && (
+                            <div className="mt-2.5 pt-2 border-t border-slate-800/80">
+                              <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                                <span className="font-semibold text-slate-300">Expense Rules ({profile.expenses.filter((e) => e.enabled).length}):</span>
+                                <span className="text-amber-400 font-mono">
+                                  {profile.expenses.filter((e) => e.enabled && e.basis === 'fixed_amount').length} Fixed •{' '}
+                                  {profile.expenses.filter((e) => e.enabled && e.basis !== 'fixed_amount').length} %-based
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {profile.expenses
+                                  .filter((e) => e.enabled)
+                                  .slice(0, 5)
+                                  .map((e) => (
+                                    <span
+                                      key={e.id}
+                                      className={`text-[9px] px-1.5 py-0.5 rounded font-mono border ${
+                                        e.basis === 'fixed_amount'
+                                          ? 'bg-blue-500/15 border-blue-500/30 text-blue-300'
+                                          : 'bg-slate-900 border-slate-800 text-slate-300'
+                                      }`}
+                                    >
+                                      {e.name}: {e.basis === 'fixed_amount' ? `${currentGeneralSettings.currencySymbol}${e.fixedAmount}` : `${e.percentage}%`}
+                                    </span>
+                                  ))}
+                                {profile.expenses.filter((e) => e.enabled).length > 5 && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono">
+                                    +{profile.expenses.filter((e) => e.enabled).length - 5} more
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
                           {profile.notes && (
                             <div className="text-[11px] text-slate-400 italic mt-2 line-clamp-2">
                               "{profile.notes}"
@@ -707,49 +744,222 @@ export const CompanyProfilesModal: React.FC<CompanyProfilesModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Expense Defaults */}
-                    <div>
-                      <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">
-                        Default Expense Rules for this Company
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {formExpenses.map((exp, idx) => (
-                          <div
-                            key={exp.id}
-                            className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-900/60 border border-slate-800 text-xs"
-                          >
-                            <label className="flex items-center gap-2 text-slate-300 font-medium">
-                              <input
-                                type="checkbox"
-                                checked={exp.enabled}
-                                onChange={(e) => {
-                                  const updated = [...formExpenses];
-                                  updated[idx] = { ...updated[idx], enabled: e.target.checked };
-                                  setFormExpenses(updated);
-                                }}
-                                className="accent-amber-500 rounded"
-                              />
-                              <span className="truncate max-w-[140px]">{exp.name}</span>
-                            </label>
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={exp.percentage}
-                                onChange={(e) => {
-                                  const updated = [...formExpenses];
-                                  updated[idx] = {
-                                    ...updated[idx],
-                                    percentage: parseFloat(e.target.value) || 0,
-                                  };
-                                  setFormExpenses(updated);
-                                }}
-                                className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-white text-right font-mono"
-                              />
-                              <span className="text-slate-500">%</span>
-                            </div>
+                    {/* Expense Defaults (Fixed or Percentage) */}
+                    <div className="space-y-3 pt-3 border-t border-slate-800">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <Percent className="w-3.5 h-3.5" />
+                            <span>Default Expense Rules for this Company</span>
                           </div>
-                        ))}
+                          <p className="text-[11px] text-slate-400">
+                            Configure each expense as a Fixed Amount ({currentGeneralSettings.currencySymbol}) OR a Percentage (%) for this client.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newExp: ExpenseItem = {
+                                id: `exp-custom-${Date.now()}`,
+                                name: 'Custom Expense',
+                                enabled: true,
+                                basis: 'fixed_amount',
+                                percentage: 0,
+                                fixedAmount: 500,
+                              };
+                              setFormExpenses((prev) => [...prev, newExp]);
+                            }}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-bold transition"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Add Expense</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormExpenses(JSON.parse(JSON.stringify(DEFAULT_EXPENSES)))}
+                            className="text-[11px] text-slate-400 hover:text-slate-200 underline"
+                          >
+                            Reset Defaults
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
+                        {formExpenses.map((exp, idx) => {
+                          const isFixed = exp.basis === 'fixed_amount';
+                          const isTds = exp.isTds || exp.id === 'exp-tds';
+
+                          return (
+                            <div
+                              key={exp.id || idx}
+                              className={`p-3 rounded-xl border transition space-y-2.5 ${
+                                exp.enabled
+                                  ? 'bg-slate-900/80 border-slate-700/80'
+                                  : 'bg-slate-950/40 border-slate-800/80 opacity-60'
+                              }`}
+                            >
+                              {/* Top row: Checkbox, Name, and Badges */}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <input
+                                    type="checkbox"
+                                    checked={exp.enabled}
+                                    onChange={(e) => {
+                                      const updated = [...formExpenses];
+                                      updated[idx] = { ...updated[idx], enabled: e.target.checked };
+                                      setFormExpenses(updated);
+                                    }}
+                                    className="accent-amber-500 rounded w-4 h-4 cursor-pointer shrink-0"
+                                    title={exp.enabled ? 'Enabled' : 'Disabled'}
+                                  />
+                                  <input
+                                    type="text"
+                                    value={exp.name}
+                                    onChange={(e) => {
+                                      const updated = [...formExpenses];
+                                      updated[idx] = { ...updated[idx], name: e.target.value };
+                                      setFormExpenses(updated);
+                                    }}
+                                    className="bg-transparent border-b border-transparent hover:border-slate-600 focus:border-amber-500 text-xs font-semibold text-white focus:outline-none w-full truncate"
+                                    placeholder="Expense Name"
+                                  />
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {isTds && (
+                                    <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">
+                                      TDS 194C
+                                    </span>
+                                  )}
+                                  {exp.id.startsWith('exp-custom-') && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setFormExpenses((prev) => prev.filter((_, i) => i !== idx));
+                                      }}
+                                      className="p-1 text-slate-500 hover:text-rose-400 rounded transition"
+                                      title="Delete Expense"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Bottom row: Mode Switcher (Percentage % vs Fixed ₹) and Input */}
+                              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center pt-1 border-t border-slate-800">
+                                {/* Type Selector: Segmented Pill */}
+                                <div className="sm:col-span-5 flex rounded-lg bg-slate-950 p-0.5 border border-slate-800 text-[10px] font-bold">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = [...formExpenses];
+                                      updated[idx] = {
+                                        ...updated[idx],
+                                        basis: updated[idx].basis === 'fixed_amount' ? 'selling_price' : updated[idx].basis,
+                                      };
+                                      setFormExpenses(updated);
+                                    }}
+                                    className={`flex-1 py-1 rounded transition text-center ${
+                                      !isFixed
+                                        ? 'bg-amber-500 text-slate-950 shadow-sm'
+                                        : 'text-slate-400 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    % Rate
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = [...formExpenses];
+                                      updated[idx] = {
+                                        ...updated[idx],
+                                        basis: 'fixed_amount',
+                                      };
+                                      setFormExpenses(updated);
+                                    }}
+                                    className={`flex-1 py-1 rounded transition text-center ${
+                                      isFixed
+                                        ? 'bg-blue-600 text-white shadow-sm'
+                                        : 'text-slate-400 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    {currentGeneralSettings.currencySymbol} Fixed
+                                  </button>
+                                </div>
+
+                                {/* Value Input & Optional Basis Dropdown */}
+                                <div className="sm:col-span-7 flex items-center gap-1.5">
+                                  {isFixed ? (
+                                    <div className="relative flex-1">
+                                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-mono font-bold">
+                                        {currentGeneralSettings.currencySymbol}
+                                      </span>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="50"
+                                        value={exp.fixedAmount || 0}
+                                        onChange={(e) => {
+                                          const updated = [...formExpenses];
+                                          updated[idx] = {
+                                            ...updated[idx],
+                                            fixedAmount: Math.max(0, parseFloat(e.target.value) || 0),
+                                          };
+                                          setFormExpenses(updated);
+                                        }}
+                                        placeholder="0"
+                                        className="w-full bg-slate-950 border border-slate-700 focus:border-blue-500 rounded-lg pl-6 pr-2.5 py-1 text-xs text-white font-mono font-bold text-right"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <select
+                                        value={exp.basis}
+                                        onChange={(e) => {
+                                          const updated = [...formExpenses];
+                                          updated[idx] = {
+                                            ...updated[idx],
+                                            basis: e.target.value as ExpenseBasis,
+                                          };
+                                          setFormExpenses(updated);
+                                        }}
+                                        className="w-28 bg-slate-950 border border-slate-700 rounded-lg px-1.5 py-1 text-[10px] text-slate-300 focus:border-amber-500"
+                                        title="Calculation Basis"
+                                      >
+                                        <option value="selling_price">% SP</option>
+                                        <option value="buying_price">% BP</option>
+                                        <option value="gross_profit">% Gross</option>
+                                      </select>
+                                      <div className="relative flex-1">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          step="0.05"
+                                          value={exp.percentage}
+                                          onChange={(e) => {
+                                            const updated = [...formExpenses];
+                                            updated[idx] = {
+                                              ...updated[idx],
+                                              percentage: Math.max(0, parseFloat(e.target.value) || 0),
+                                            };
+                                            setFormExpenses(updated);
+                                          }}
+                                          placeholder="0.00"
+                                          className="w-full bg-slate-950 border border-slate-700 focus:border-amber-500 rounded-lg px-2 py-1 text-xs text-white font-mono font-bold text-right pr-6"
+                                        />
+                                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-mono">
+                                          %
+                                        </span>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
